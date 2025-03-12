@@ -2,10 +2,10 @@ from lightning import LightningDataModule
 import torch
 from torch.nn.functional import one_hot
 from torch.utils.data import DataLoader
-from torchvision.transforms import v2
 from torchvision.datasets import VisionDataset
+from torchvision.transforms import v2
 
-from utils import new_labels, DATASET_TYPE
+from utils import DATASET_TYPE, new_labels
 
 
 class RelabeledDataset(VisionDataset):

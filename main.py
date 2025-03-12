@@ -4,9 +4,9 @@ import os
 from lightning import Trainer
 from lightning.pytorch.loggers import CSVLogger
 
+from datasets import DataModule, DecoderData
 import networks
 from utils import convert_to_classes
-from datasets import DataModule, DecoderData
 
 
 def get_args():

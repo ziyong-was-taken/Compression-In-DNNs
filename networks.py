@@ -1,14 +1,15 @@
 from collections import OrderedDict
 from copy import deepcopy
 
-import torch
 import lightning as L
+import torch
 from torch import nn
+from torch.utils.hooks import RemovableHandle
 from torchvision.models import convnext_tiny, resnet18
 from torchvision.models.feature_extraction import create_feature_extractor
 
-from utils import NL_TYPE, LOSS_TYPE, OPTIMISER_TYPE
 from datasets import DecoderData
+from utils import LOSS_TYPE, NL_TYPE, OPTIMISER_TYPE
 
 
 class _Network(L.LightningModule):
@@ -39,7 +40,7 @@ class _Network(L.LightningModule):
         while loss.dim() > 0:
             loss = loss.mean(dim=-1)
         if self.logging:
-            self.log("train_loss", loss, on_step=False, on_epoch=True)
+            self.log("train_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
         return loss
 
     def configure_optimizers(self):
@@ -100,8 +101,8 @@ class _MetricNetwork(_Network):
         self.decoder_trainer = decoder_trainer
         self.decoder_dm = decoder_dm
 
-        # initial feature extractor
-        self.feature_extractor: torch.fx.GraphModule
+        # storing handles to hooks not strictly necessary, but good practice
+        self.hook_handles: dict[str, RemovableHandle] = {}
 
         # storage for NC metrics
         #   hˡ: size of flattened activations of layer l
@@ -110,26 +111,43 @@ class _MetricNetwork(_Network):
         #       layer_metrics[l][num_classes:]: gram matrix (hˡ × hˡ)
         self.num_classes = num_classes
         self.class_counts = torch.zeros(num_classes)
+        self.layer_outputs: dict[str, torch.Tensor] = {}
         self.layer_metrics: dict[str, torch.Tensor] = {}
 
-    def _update_feature_extractor(self, new_hooks: dict[str, str]):
-        """Update the feature extractor by calling `forward` and setting hooks"""
-        out_hooks = new_hooks | {"softmax": "nc_output"}
-        self.feature_extractor = create_feature_extractor(self, return_nodes=out_hooks)
+    def _register_hooks(self, new_hooks: dict[str, nn.Module]):
+        """Register forward hooks for NC metrics"""
+        # remove old hooks (there shouldn't be any)
+        for handle in self.hook_handles.values():
+            handle.remove()
+        self.hook_handles.clear()
 
-    def on_train_batch_start(self, batch: list[torch.Tensor], _batch_idx):
+        # get_hook: layer_name -> (hook: module, args, output -> None)
+        def get_hook(name):
+            def hook(_module, _args, output):
+                self.layer_outputs[name] = output
+
+            return hook
+
+        # register new hooks
+        new_hooks |= {"nc_output": self.softmax}
+        for name, module in new_hooks.items():
+            self.hook_handles[name] = module.register_forward_hook(get_hook(name))
+
+    def on_train_batch_end(self, _outputs, batch: list[torch.Tensor], _batch_idx):
         """Update NC metrics"""
         with torch.no_grad():
-            inputs, targets = batch
+            _, targets = batch
             self.class_counts += targets.sum(dim=0)
-            activations_dict: dict[str, torch.Tensor] = self.feature_extractor(inputs)
-            for layer, activations in activations_dict.items():
+
+            # process each layer's activations
+            for layer, activations in self.layer_outputs.items():
                 activations = activations.flatten(start_dim=1)
                 target_and_activations = torch.cat([targets, activations], dim=1)
                 joint_metric = target_and_activations.T @ activations
                 if layer not in self.layer_metrics:
                     self.layer_metrics[layer] = torch.zeros_like(joint_metric)
                 self.layer_metrics[layer] += joint_metric
+            self.layer_outputs.clear()
 
     def on_train_epoch_end(self):
         """Compute and log NC metrics. Also train decoders."""
@@ -148,7 +166,7 @@ class _MetricNetwork(_Network):
                     - between_cov
                 )
                 nc[layer] = (within_cov @ between_cov.pinverse()).trace()
-        self.log_dict(nc)
+        self.log_dict(nc, sync_dist=True)
 
         # reset NC metrics
         self.class_counts.zero_()
@@ -191,8 +209,8 @@ class MLP(_MetricNetwork):
         self.fc = nn.Linear(widths[-2], self.num_classes)
 
         # update return nodes (output hooks)
-        super()._update_feature_extractor(
-            {f"blocks.{i}.nl": f"nc_layer_{i}" for i, _ in enumerate(self.blocks)}
+        super()._register_hooks(
+            {f"nc_layer_{i}": block.nl for i, block in enumerate(self.blocks)}
         )
 
     def _forward(self, x):
@@ -231,12 +249,10 @@ class ConvNeXt(_MetricNetwork):
         )
 
         # update return nodes (output hooks)
-        super()._update_feature_extractor(
-            {
-                f"convnext.features.{2 * i + 1}.{j}.add": f"nc_layer_{i}"
-                for i, j in zip(range(4), (2, 2, 8, 2))
-            }
-        )
+        new_hooks = {}
+        for i, j in zip(range(4), (2, 2, 8, 2)):
+            new_hooks[f"nc_layer_{i}"] = self.convnext.features[2 * i + 1][j].add
+        super()._register_hooks(new_hooks)
 
     def _forward(self, x):
         return self.convnext(x)
@@ -280,9 +296,11 @@ class ResNet(_MetricNetwork):
         self.resnet.fc = nn.Linear(self.resnet.fc.in_features, num_classes)
 
         # update return nodes (output hooks)
-        super()._update_feature_extractor(
-            {f"resnet.layer{i + 1}.1.relu_1": f"nc_layer_{i}" for i in range(4)}
-        )
+        new_hooks = {}
+        for i in range(4):
+            layer = getattr(self.resnet, f"layer{i + 1}")
+            new_hooks[f"nc_layer_{i}"] = layer[1].relu
+        super()._register_hooks(new_hooks)
 
     def _forward(self, x):
         return self.resnet(x)

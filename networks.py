@@ -6,10 +6,11 @@ import torch
 from torch import nn
 from torch.utils.hooks import RemovableHandle
 from torchvision.models import convnext_tiny, resnet18
-from torchvision.models.feature_extraction import create_feature_extractor
 
 from datasets import DecoderData
 from utils import LOSS_TYPE, NL_TYPE, OPTIMISER_TYPE
+
+HPARAM_TYPE = tuple[LOSS_TYPE, OPTIMISER_TYPE, int, L.Trainer, DecoderData]
 
 
 class _Network(L.LightningModule):
@@ -19,7 +20,7 @@ class _Network(L.LightningModule):
         super().__init__()
 
         # store architecture parameters
-        self.criterion = criterion(reduction="none")
+        self.criterion = criterion
         self.optimiser = optimiser
         self.logging = logging
 
@@ -36,7 +37,7 @@ class _Network(L.LightningModule):
     def training_step(self, batch: list[torch.Tensor]):
         """Compute and log training loss by averaging over classes, (decoders) and then the batch"""
         inputs, targets = batch
-        loss: torch.Tensor = self.criterion(self(inputs), targets)
+        loss: torch.Tensor = self.criterion(reduction="none")(self(inputs), targets)
         while loss.dim() > 0:
             loss = loss.mean(dim=-1)
         if self.logging:
@@ -61,11 +62,6 @@ class Decoders(_Network):
         self.encoder = encoder
         self.decoders = nn.ModuleList(deepcopy(decoder) for _ in range(num_decoders))
 
-        # freeze encoder
-        self.encoder.eval()
-        for param in self.encoder.parameters():
-            param.requires_grad = False
-
     def _forward(self, x):
         encoded = self.encoder(x)
         return torch.stack([d(encoded) for d in self.decoders], dim=-2)
@@ -80,10 +76,22 @@ class Decoders(_Network):
                 batch_size = batch[0].size(0)
                 totals[0] += super().training_step(batch) * batch_size
                 totals[1] += batch_size
-        self.log("v_info", totals[0] / totals[1])
+        self.logger.log_metrics(
+            {"v_info": (totals[0] / totals[1]).item()}, step=self.global_step
+        )
 
     def configure_optimizers(self):
         return self.optimiser(self.decoders.parameters())
+
+    def freeze_encoder(self):
+        self.encoder.eval()
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+
+    def unfreeze_encoder(self):
+        self.encoder.train()
+        for param in self.encoder.parameters():
+            param.requires_grad = True
 
 
 class _MetricNetwork(_Network):
@@ -91,6 +99,7 @@ class _MetricNetwork(_Network):
         self,
         criterion: LOSS_TYPE,
         optimiser: OPTIMISER_TYPE,
+        num_decoders: int,
         decoder_trainer: L.Trainer,
         decoder_dm: DecoderData,
         num_classes: int,
@@ -98,6 +107,7 @@ class _MetricNetwork(_Network):
         super().__init__(criterion, optimiser)
 
         # store decoder parameters
+        self.num_decoders = num_decoders
         self.decoder_trainer = decoder_trainer
         self.decoder_dm = decoder_dm
 
@@ -138,8 +148,6 @@ class _MetricNetwork(_Network):
         with torch.no_grad():
             _, targets = batch
             self.class_counts += targets.sum(dim=0)
-
-            # process each layer's activations
             for layer, activations in self.layer_outputs.items():
                 activations = activations.flatten(start_dim=1)
                 target_and_activations = torch.cat([targets, activations], dim=1)
@@ -147,7 +155,6 @@ class _MetricNetwork(_Network):
                 if layer not in self.layer_metrics:
                     self.layer_metrics[layer] = torch.zeros_like(joint_metric)
                 self.layer_metrics[layer] += joint_metric
-            self.layer_outputs.clear()
 
     def on_train_epoch_end(self):
         """Compute and log NC metrics. Also train decoders."""
@@ -166,6 +173,7 @@ class _MetricNetwork(_Network):
                     - between_cov
                 )
                 nc[layer] = (within_cov @ between_cov.pinverse()).trace()
+
         self.log_dict(nc, sync_dist=True)
 
         # reset NC metrics
@@ -173,11 +181,12 @@ class _MetricNetwork(_Network):
         self.layer_metrics.clear()
 
         # train decoders
-        num_decoders = self.decoder_dm.base_expansion.size(1)
         decoders = Decoders(  # TODO: try different block index
-            *self.get_encoder_decoder(block_idx=3), num_decoders, self.optimiser
+            *self.get_encoder_decoder(block_idx=3), self.num_decoders, self.optimiser
         )
+        decoders.freeze_encoder()
         # self.decoder_trainer.fit(decoders, datamodule=self.decoder_dm)
+        decoders.unfreeze_encoder()
 
     def get_encoder_decoder(self, block_idx) -> tuple[nn.Module, nn.Module]:
         """
@@ -189,10 +198,7 @@ class _MetricNetwork(_Network):
 
 class MLP(_MetricNetwork):
     def __init__(
-        self,
-        widths: list[int],
-        nonlinearity: NL_TYPE,
-        hyperparams: tuple[LOSS_TYPE, OPTIMISER_TYPE, L.Trainer, DecoderData],
+        self, widths: list[int], nonlinearity: NL_TYPE, hyperparams: HPARAM_TYPE
     ):
         super().__init__(*hyperparams, num_classes=widths[-1])
 
@@ -226,10 +232,7 @@ class MLP(_MetricNetwork):
 
 class ConvNeXt(_MetricNetwork):
     def __init__(
-        self,
-        in_shape: torch.Size,
-        num_classes: int,
-        hyperparams: tuple[LOSS_TYPE, OPTIMISER_TYPE, L.Trainer, DecoderData],
+        self, in_shape: torch.Size, num_classes: int, hyperparams: HPARAM_TYPE
     ):
         super().__init__(*hyperparams, num_classes)
 
@@ -273,10 +276,7 @@ class ConvNeXt(_MetricNetwork):
 
 class ResNet(_MetricNetwork):
     def __init__(
-        self,
-        in_shape: torch.Size,
-        num_classes: int,
-        hyperparams: tuple[LOSS_TYPE, OPTIMISER_TYPE, L.Trainer, DecoderData],
+        self, in_shape: torch.Size, num_classes: int, hyperparams: HPARAM_TYPE
     ):
         super().__init__(*hyperparams, num_classes)
 

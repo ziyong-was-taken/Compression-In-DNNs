@@ -1,7 +1,7 @@
 from collections import OrderedDict
 from copy import deepcopy
 
-import lightning as L
+from lightning import LightningModule, Trainer
 import torch
 from torch import nn
 from torch.utils.hooks import RemovableHandle
@@ -10,10 +10,11 @@ from torchvision.models import convnext_tiny, resnet18
 from datasets import DecoderData
 from utils import LOSS_TYPE, NL_TYPE, OPTIMISER_TYPE
 
-HPARAM_TYPE = tuple[LOSS_TYPE, OPTIMISER_TYPE, int, L.Trainer, DecoderData]
+
+HPARAM_TYPE = tuple[LOSS_TYPE, OPTIMISER_TYPE, int, int, DecoderData]
 
 
-class _Network(L.LightningModule):
+class _Network(LightningModule):
     def __init__(
         self, criterion: LOSS_TYPE, optimiser: OPTIMISER_TYPE, logging: bool = True
     ):
@@ -35,13 +36,11 @@ class _Network(L.LightningModule):
         return self.softmax(self._forward(x))
 
     def training_step(self, batch: list[torch.Tensor]):
-        """Compute and log training loss by averaging over classes, (decoders) and then the batch"""
+        """Compute and log average training loss"""
         inputs, targets = batch
-        loss: torch.Tensor = self.criterion(reduction="none")(self(inputs), targets)
-        while loss.dim() > 0:
-            loss = loss.mean(dim=-1)
+        loss: torch.Tensor = self.criterion()(self(inputs), targets)
         if self.logging:
-            self.log("train_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
+            self.log("train_loss", loss, on_step=False, on_epoch=True)
         return loss
 
     def configure_optimizers(self):
@@ -55,19 +54,21 @@ class Decoders(_Network):
         decoder: nn.Module,
         num_decoders: int,
         optimiser: OPTIMISER_TYPE,
+        true_epoch: int,
     ):
         super().__init__(
             criterion=nn.CrossEntropyLoss, optimiser=optimiser, logging=False
         )
         self.encoder = encoder
         self.decoders = nn.ModuleList(deepcopy(decoder) for _ in range(num_decoders))
+        self.true_epoch = true_epoch
 
     def _forward(self, x):
         encoded = self.encoder(x)
-        return torch.stack([d(encoded) for d in self.decoders], dim=-2)
+        return torch.stack([d(encoded) for d in self.decoders], dim=-1)
 
     def on_train_end(self):
-        """Compute and log average loss over all decoders"""
+        """Compute and log final average loss"""
         self.eval()
         with torch.no_grad():
             totals = torch.zeros(2)  # totals = [total_loss, count]
@@ -77,7 +78,8 @@ class Decoders(_Network):
                 totals[0] += super().training_step(batch) * batch_size
                 totals[1] += batch_size
         self.logger.log_metrics(
-            {"v_info": (totals[0] / totals[1]).item()}, step=self.global_step
+            {"epoch": self.true_epoch, "v_info": (totals[0] / totals[1]).item()},
+            step=self.global_step,
         )
 
     def configure_optimizers(self):
@@ -100,7 +102,7 @@ class _MetricNetwork(_Network):
         criterion: LOSS_TYPE,
         optimiser: OPTIMISER_TYPE,
         num_decoders: int,
-        decoder_trainer: L.Trainer,
+        decoder_epochs: int,
         decoder_dm: DecoderData,
         num_classes: int,
     ):
@@ -108,7 +110,7 @@ class _MetricNetwork(_Network):
 
         # store decoder parameters
         self.num_decoders = num_decoders
-        self.decoder_trainer = decoder_trainer
+        self.decoder_epochs = decoder_epochs
         self.decoder_dm = decoder_dm
 
         # storing handles to hooks not strictly necessary, but good practice
@@ -150,11 +152,15 @@ class _MetricNetwork(_Network):
             self.class_counts += targets.sum(dim=0)
             for layer, activations in self.layer_outputs.items():
                 activations = activations.flatten(start_dim=1)
-                target_and_activations = torch.cat([targets, activations], dim=1)
-                joint_metric = target_and_activations.T @ activations
                 if layer not in self.layer_metrics:
-                    self.layer_metrics[layer] = torch.zeros_like(joint_metric)
-                self.layer_metrics[layer] += joint_metric
+                    h_l = activations.size(1)
+                    self.layer_metrics[layer] = torch.zeros(
+                        (self.num_classes + h_l, h_l)
+                    )
+                self.layer_metrics[layer][: self.num_classes] += targets.T @ activations
+                self.layer_metrics[layer][self.num_classes :] += (
+                    activations.T @ activations
+                )
 
     def on_train_epoch_end(self):
         """Compute and log NC metrics. Also train decoders."""
@@ -172,9 +178,13 @@ class _MetricNetwork(_Network):
                     - torch.outer(global_mean, global_mean)
                     - between_cov
                 )
-                nc[layer] = (within_cov @ between_cov.pinverse()).trace()
+                nc[layer] = torch.linalg.lstsq(
+                    between_cov,
+                    within_cov,
+                    rcond=1e-15,  # default value of pinverse
+                ).solution.trace()
 
-        self.log_dict(nc, sync_dist=True)
+        self.log_dict(nc)
 
         # reset NC metrics
         self.class_counts.zero_()
@@ -182,10 +192,15 @@ class _MetricNetwork(_Network):
 
         # train decoders
         decoders = Decoders(  # TODO: try different block index
-            *self.get_encoder_decoder(block_idx=3), self.num_decoders, self.optimiser
+            *self.get_encoder_decoder(block_idx=3),
+            self.num_decoders,
+            self.optimiser,
+            self.current_epoch,
         )
         decoders.freeze_encoder()
-        # self.decoder_trainer.fit(decoders, datamodule=self.decoder_dm)
+        Trainer(devices=5, max_epochs=self.decoder_epochs, logger=self.logger).fit(
+            decoders, datamodule=self.decoder_dm
+        )
         decoders.unfreeze_encoder()
 
     def get_encoder_decoder(self, block_idx) -> tuple[nn.Module, nn.Module]:

@@ -5,11 +5,18 @@ import torch
 from torch import nn, optim
 from torchvision import datasets
 
+
 # constants for type hinting
 DATASET_TYPE = type[datasets.MNIST | datasets.FashionMNIST | datasets.CIFAR10]
 NL_TYPE = type[nn.ReLU | nn.Tanh]
 LOSS_TYPE = type[nn.CrossEntropyLoss | nn.MSELoss]
 OPTIMISER_TYPE = type[optim.AdamW | optim.Adam | optim.SGD]
+
+
+# defaults for command line arguments
+EPOCHS = 5
+BATCH_SIZE = 64
+DECODER_EPOCHS = 1
 
 
 def get_args():
@@ -74,10 +81,10 @@ def get_args():
         choices=["CrossEntropy", "MSE"],
         help="loss function to use, case-sensitive",
     )
-    parser.add_argument("--epochs", default=100, type=int)
-    parser.add_argument("-bs", "--batch-size", default=64, type=int)
-    parser.add_argument("--decoder-epochs", default=5, type=int)
-    parser.add_argument("--decoder-batch-size", default=64, type=int)
+    parser.add_argument("--epochs", default=EPOCHS, type=int)
+    parser.add_argument("-bs", "--batch-size", default=BATCH_SIZE, type=int)
+    parser.add_argument("--decoder-epochs", default=DECODER_EPOCHS, type=int)
+    parser.add_argument("--decoder-batch-size", default=BATCH_SIZE, type=int)
     return parser.parse_args()
 
 

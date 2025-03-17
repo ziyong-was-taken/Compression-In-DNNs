@@ -15,15 +15,12 @@ HPARAM_TYPE = tuple[LOSS_TYPE, OPTIMISER_TYPE, int, int, DecoderData]
 
 
 class _Network(LightningModule):
-    def __init__(
-        self, criterion: LOSS_TYPE, optimiser: OPTIMISER_TYPE, logging: bool = True
-    ):
+    def __init__(self, criterion: LOSS_TYPE, optimiser: OPTIMISER_TYPE):
         super().__init__()
 
         # store architecture parameters
         self.criterion = criterion
         self.optimiser = optimiser
-        self.logging = logging
 
         # final softmax layer
         self.softmax = nn.Softmax(dim=-1)
@@ -38,9 +35,8 @@ class _Network(LightningModule):
     def training_step(self, batch: list[torch.Tensor]):
         """Compute and log average training loss"""
         inputs, targets = batch
-        loss: torch.Tensor = self.criterion()(self(inputs), targets)
-        if self.logging:
-            self.log("train_loss", loss, on_step=False, on_epoch=True)
+        loss = self.criterion()(self(inputs), targets)
+        self.log("train_loss", loss, on_step=False, on_epoch=True)
         return loss
 
     def configure_optimizers(self):
@@ -54,46 +50,36 @@ class Decoders(_Network):
         decoder: nn.Module,
         num_decoders: int,
         optimiser: OPTIMISER_TYPE,
-        true_epoch: int,
     ):
-        super().__init__(
-            criterion=nn.CrossEntropyLoss, optimiser=optimiser, logging=False
-        )
+        super().__init__(criterion=nn.CrossEntropyLoss, optimiser=optimiser)
         self.encoder = encoder
         self.decoders = nn.ModuleList(deepcopy(decoder) for _ in range(num_decoders))
-        self.true_epoch = true_epoch
 
-    def _forward(self, x):
-        encoded = self.encoder(x)
-        return torch.stack([d(encoded) for d in self.decoders], dim=-1)
-
-    def on_train_end(self):
-        """Compute and log final average loss"""
-        self.eval()
-        with torch.no_grad():
-            totals = torch.zeros(2)  # totals = [total_loss, count]
-            batch: list[torch.Tensor]
-            for batch in self.trainer.train_dataloader:
-                batch_size = batch[0].size(0)
-                totals[0] += super().training_step(batch) * batch_size
-                totals[1] += batch_size
-        self.logger.log_metrics(
-            {"epoch": self.true_epoch, "v_info": (totals[0] / totals[1]).item()},
-            step=self.global_step,
-        )
-
-    def configure_optimizers(self):
-        return self.optimiser(self.decoders.parameters())
-
-    def freeze_encoder(self):
+    def __enter__(self):
+        """Freeze encoder"""
         self.encoder.eval()
         for param in self.encoder.parameters():
             param.requires_grad = False
+        return self
 
-    def unfreeze_encoder(self):
+    def __exit__(self, _exc_type, _exc_value, _traceback):
+        """Unfreeze encoder"""
         self.encoder.train()
         for param in self.encoder.parameters():
             param.requires_grad = True
+
+    def _forward(self, x):
+        encoded = self.encoder(x)
+        if torch.cuda.is_available():
+            outputs = nn.parallel.parallel_apply(
+                (*self.decoders,), (encoded,) * len(self.decoders)
+            )
+        else:
+            outputs = [d(encoded) for d in self.decoders]
+        return torch.stack(outputs, dim=-1)
+
+    def configure_optimizers(self):
+        return self.optimiser(self.decoders.parameters())
 
 
 class _MetricNetwork(_Network):
@@ -113,14 +99,14 @@ class _MetricNetwork(_Network):
         self.decoder_epochs = decoder_epochs
         self.decoder_dm = decoder_dm
 
-        # storing handles to hooks not strictly necessary, but good practice
+        # store handles to hooks (not strictly necessary, but good practice)
         self.hook_handles: dict[str, RemovableHandle] = {}
 
         # storage for NC metrics
-        #   hˡ: size of flattened activations of layer l
-        #   layer_metrics[l]: ((num_classes + hˡ) × hˡ)
-        #       layer_metrics[l][:num_classes]: class sums of activations (num_classes × hˡ)
-        #       layer_metrics[l][num_classes:]: gram matrix (hˡ × hˡ)
+        # hˡ: size of flattened activations of layer l
+        # layer_metrics[l]: ((num_classes + hˡ) × hˡ)
+        #     layer_metrics[l][:num_classes]: class sums of activations (num_classes × hˡ)
+        #     layer_metrics[l][num_classes:]: gram matrix (hˡ × hˡ)
         self.num_classes = num_classes
         self.class_counts = torch.zeros(num_classes)
         self.layer_outputs: dict[str, torch.Tensor] = {}
@@ -163,7 +149,10 @@ class _MetricNetwork(_Network):
                 )
 
     def on_train_epoch_end(self):
-        """Compute and log NC metrics. Also train decoders."""
+        """
+        Compute and log NC metrics.
+        Also train decoders and log decodable info.
+        """
         with torch.no_grad():
             nc: dict[str, torch.Tensor] = {}
             total_count = self.class_counts.sum()
@@ -183,7 +172,6 @@ class _MetricNetwork(_Network):
                     within_cov,
                     rcond=1e-15,  # default value of pinverse
                 ).solution.trace()
-
         self.log_dict(nc)
 
         # reset NC metrics
@@ -191,17 +179,17 @@ class _MetricNetwork(_Network):
         self.layer_metrics.clear()
 
         # train decoders
-        decoders = Decoders(  # TODO: try different block index
-            *self.get_encoder_decoder(block_idx=3),
-            self.num_decoders,
-            self.optimiser,
-            self.current_epoch,
-        )
-        decoders.freeze_encoder()
-        Trainer(devices=5, max_epochs=self.decoder_epochs, logger=self.logger).fit(
-            decoders, datamodule=self.decoder_dm
-        )
-        decoders.unfreeze_encoder()
+        with Decoders(  # TODO: try different block indices
+            *self.get_encoder_decoder(block_idx=3), self.num_decoders, self.optimiser
+        ) as decoders:
+            decoder_trainer = Trainer(
+                devices=5,
+                max_epochs=self.decoder_epochs,
+                logger=False,  # don't log (but do store) training losses
+            )
+            decoder_trainer.fit(decoders, datamodule=self.decoder_dm)
+            v_info = decoder_trainer.logged_metrics["train_loss"]
+        self.log("v_info", v_info)
 
     def get_encoder_decoder(self, block_idx) -> tuple[nn.Module, nn.Module]:
         """
@@ -280,7 +268,6 @@ class ConvNeXt(_MetricNetwork):
         assert block_idx < num_blocks, f"ConvNeXt only has {num_blocks} blocks"
 
         encoder = self.convnext.features[: 2 * block_idx]
-        # Fixed sequential construction - don't use append
         decoder = nn.Sequential(
             *self.convnext.features[2 * block_idx :],
             self.convnext.avgpool,

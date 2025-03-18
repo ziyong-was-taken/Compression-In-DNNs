@@ -52,21 +52,13 @@ class Decoders(_Network):
         optimiser: OPTIMISER_TYPE,
     ):
         super().__init__(criterion=nn.CrossEntropyLoss, optimiser=optimiser)
-        self.encoder = encoder
+        self.encoder = deepcopy(encoder)  # not copying encoder messes with momentum
         self.decoders = nn.ModuleList(deepcopy(decoder) for _ in range(num_decoders))
 
-    def __enter__(self):
-        """Freeze encoder"""
+        # freeze encoder
         self.encoder.eval()
         for param in self.encoder.parameters():
             param.requires_grad = False
-        return self
-
-    def __exit__(self, _exc_type, _exc_value, _traceback):
-        """Unfreeze encoder"""
-        self.encoder.train()
-        for param in self.encoder.parameters():
-            param.requires_grad = True
 
     def _forward(self, x):
         encoded = self.encoder(x)
@@ -103,10 +95,10 @@ class _MetricNetwork(_Network):
         self.hook_handles: dict[str, RemovableHandle] = {}
 
         # storage for NC metrics
-        # hˡ: size of flattened activations of layer l
-        # layer_metrics[l]: ((num_classes + hˡ) × hˡ)
-        #     layer_metrics[l][:num_classes]: class sums of activations (num_classes × hˡ)
-        #     layer_metrics[l][num_classes:]: gram matrix (hˡ × hˡ)
+        # zˡ: size of flattened activations of layer l
+        # layer_metrics[l]: ((num_classes + zˡ) × zˡ)
+        #     layer_metrics[l][:num_classes]: class sums of activations (num_classes × zˡ)
+        #     layer_metrics[l][num_classes:]: gram matrix (zˡ × zˡ)
         self.num_classes = num_classes
         self.class_counts = torch.zeros(num_classes)
         self.layer_outputs: dict[str, torch.Tensor] = {}
@@ -135,13 +127,18 @@ class _MetricNetwork(_Network):
         """Update NC metrics"""
         with torch.no_grad():
             _, targets = batch
-            self.class_counts += targets.sum(dim=0)
+
+            # only update class counts on first epoch
+            if self.current_epoch == 0:
+                self.class_counts += targets.sum(dim=0)
+
+            # update other metrics
             for layer, activations in self.layer_outputs.items():
                 activations = activations.flatten(start_dim=1)
                 if layer not in self.layer_metrics:
-                    h_l = activations.size(1)
+                    act_size = activations.size(1)
                     self.layer_metrics[layer] = torch.zeros(
-                        (self.num_classes + h_l, h_l)
+                        (self.num_classes + act_size, act_size)
                     )
                 self.layer_metrics[layer][: self.num_classes] += targets.T @ activations
                 self.layer_metrics[layer][self.num_classes :] += (
@@ -168,27 +165,26 @@ class _MetricNetwork(_Network):
                     - between_cov
                 )
                 nc[layer] = torch.linalg.lstsq(
-                    between_cov,
-                    within_cov,
-                    rcond=1e-15,  # default value of pinverse
+                    between_cov, within_cov, rcond=1e-5
                 ).solution.trace()
         self.log_dict(nc)
 
-        # reset NC metrics
-        self.class_counts.zero_()
+        # reset NC metrics for next epoch (class counts don't change)
         self.layer_metrics.clear()
 
         # train decoders
-        with Decoders(  # TODO: try different block indices
+        decoders = Decoders(  # TODO: try different block indices
             *self.get_encoder_decoder(block_idx=3), self.num_decoders, self.optimiser
-        ) as decoders:
-            decoder_trainer = Trainer(
-                devices=5,
-                max_epochs=self.decoder_epochs,
-                logger=False,  # don't log (but do store) training losses
-            )
-            decoder_trainer.fit(decoders, datamodule=self.decoder_dm)
-            v_info = decoder_trainer.logged_metrics["train_loss"]
+        )
+        decoder_trainer = Trainer(
+            devices=10,
+            max_epochs=self.decoder_epochs,
+            logger=False,  # don't write (but do store) training losses
+            enable_checkpointing=False,  # don't save checkpoints
+            deterministic=True,
+        )
+        decoder_trainer.fit(decoders, datamodule=self.decoder_dm)
+        v_info = decoder_trainer.logged_metrics["train_loss"]
         self.log("v_info", v_info)
 
     def get_encoder_decoder(self, block_idx) -> tuple[nn.Module, nn.Module]:

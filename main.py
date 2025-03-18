@@ -1,6 +1,6 @@
 import os
 
-from lightning import Trainer
+from lightning import Trainer, seed_everything
 from lightning.pytorch.loggers import CSVLogger
 
 from datasets import DataModule, DecoderData
@@ -10,6 +10,7 @@ from utils import convert_to_classes, get_args
 
 if __name__ == "__main__":
     args = get_args()
+    seed_everything(seed=0, workers=True)
 
     # convert strings to class constructors
     dataset, nonlinearity, criterion, optimiser = convert_to_classes(
@@ -42,11 +43,16 @@ if __name__ == "__main__":
                 nonlinearity,
                 hyperparams,
             )
-        case "ConvNeXt" | "ResNet":
+        case _:
             model = getattr(networks, args.model)(
                 dm.input_size, dm.num_classes, hyperparams
             )
 
     # train model (cannot use multiple devices due to nested training)
     logger = CSVLogger(os.getcwd())
-    Trainer(devices=1, max_epochs=args.epochs, logger=logger).fit(model, datamodule=dm)
+    Trainer(
+        devices=1,
+        max_epochs=args.epochs,
+        logger=logger,
+        deterministic=True,
+    ).fit(model, datamodule=dm)

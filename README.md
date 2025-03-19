@@ -133,7 +133,7 @@ The new sample labels are then [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] and [0, 1, 2
 
 ### DIB Computation
 
-- compute new labels for all samples using modified Algorithm 1
+- compute new labels for all samples using [modified Algorithm 1](#modified-algorithm-1)
 - for each new label, create a copy of the decoder $D$ returned by `model.get_encoder_decoder()`
 - combine the encoder $E$ and decoders $D_1, D_2, \dots$ into a single model $M$
   <!---->

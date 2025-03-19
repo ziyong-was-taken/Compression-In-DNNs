@@ -129,7 +129,7 @@ The new sample labels are then [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] and [0, 1, 2
     \end{align*}
     $$
   - thus, $Σ_W^l = G^l/N - \bar{\boldsymbol μ}^l \bar{\boldsymbol μ}^{l⊤} - Σ_B^l$
-- finally, since $\operatorname{tr}(Σ_W^l Σ_B^{l+}) = \operatorname{tr}(Σ_B^{l+} Σ_W^l)$, use `torch.linalg.lstsq` to compute $Σ_B^{l+} Σ_W^l$
+- finally, since $\operatorname{tr}(Σ_W^l Σ_B^{l+}) = \operatorname{tr}(Σ_B^{l+} Σ_W^l)$, use `torch.linalg.lstsq(Σ_B^l, Σ_W^l)` to compute $Σ_B^{l+} Σ_W^l$
 
 ### DIB Computation
 
@@ -137,7 +137,7 @@ The new sample labels are then [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] and [0, 1, 2
 - for each new label, create a copy of the decoder $D$ returned by `model.get_encoder_decoder()`
 - combine the encoder $E$ and decoders $D_1, D_2, \dots$ into a single model $M$
   <!---->
-  ```markdown
+  ```plaintext
          E
   M =  / | \
       D₁ D₂ …

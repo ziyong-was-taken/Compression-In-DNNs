@@ -15,6 +15,11 @@ HPARAM_TYPE = tuple[LOSS_TYPE, OPTIMISER_TYPE, int, int, DecoderData]
 
 
 class _Network(LightningModule):
+    """
+    The blueprint for a basic network with a softmax output layer.
+    Simply implement `_forward` and the blueprint handles the rest.
+    """
+
     def __init__(self, criterion: LOSS_TYPE, optimiser: OPTIMISER_TYPE):
         super().__init__()
 
@@ -75,6 +80,11 @@ class Decoders(_Network):
 
 
 class _MetricNetwork(_Network):
+    """
+    A blueprint which extends `_Network` by also
+    computing the metrics at the end of each epoch.
+    """
+
     def __init__(
         self,
         criterion: LOSS_TYPE,

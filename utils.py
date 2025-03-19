@@ -104,7 +104,10 @@ def new_labels(labels: torch.Tensor, num_classes: int):
     r"""
     Generate random relabeling `N` of the data where `N[i,:]` are the new labels of the `i`th sample.
     Each sample obtains ⌊log_{`num_classes`}(max{|X_y| : y ∈ Y} - 1)⌋ + 1 new labels,
-    where X_y = {x ∈ X : x.label = y}$ and Y = {0,…,`num_classes`-1} is the set of all labels.
+    where X_y = {x ∈ X : x.label = y}$ and
+    Y = {0,…,`num_classes`-1} is the set of all labels.
+    Based on Algorithm 1 of
+    "Learning Optimal Representations with the Decodable Information Bottleneck".
     """
     assert labels.dim() == 1, "labels must be 1D"
     assert torch.max(labels) < num_classes, "labels ⊈ {0,…,num_classes}"
@@ -112,7 +115,7 @@ def new_labels(labels: torch.Tensor, num_classes: int):
     # compute ⌊log_{|Y|}(max{|X_y| : y ∈ Y} - 1)⌋ + 1 = ⌈log_{|Y|}(max{|X_y| : y ∈ Y})⌉
     num_digits = math.ceil(math.log(labels.bincount().max().item(), num_classes))
 
-    # Algorithm 1 of dib-2020
+    # enumerate samples of the same class 
     idcs = torch.zeros_like(labels)
     for y in range(num_classes):
         mask = labels == y

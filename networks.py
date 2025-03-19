@@ -3,15 +3,16 @@ from copy import deepcopy
 
 from lightning import LightningModule, Trainer
 import torch
-from torch import nn
+from torch import nn, optim
 from torch.utils.hooks import RemovableHandle
 from torchvision.models import convnext_tiny, resnet18
 
 from datasets import DecoderData
-from utils import LOSS_TYPE, NL_TYPE, OPTIMISER_TYPE
 
-
-HPARAM_TYPE = tuple[LOSS_TYPE, OPTIMISER_TYPE, int, int, DecoderData]
+NL_TYPE = type[nn.ReLU | nn.Tanh]
+LOSS_TYPE = type[nn.CrossEntropyLoss | nn.MSELoss]
+OPT_TYPE = type[optim.AdamW | optim.Adam | optim.SGD]
+HPARAM_TYPE = tuple[LOSS_TYPE, OPT_TYPE, int, int, DecoderData]
 
 
 class _Network(LightningModule):
@@ -20,7 +21,7 @@ class _Network(LightningModule):
     Simply implement `_forward` and the blueprint handles the rest.
     """
 
-    def __init__(self, criterion: LOSS_TYPE, optimiser: OPTIMISER_TYPE):
+    def __init__(self, criterion: LOSS_TYPE, optimiser: OPT_TYPE):
         super().__init__()
 
         # store architecture parameters
@@ -54,7 +55,7 @@ class Decoders(_Network):
         encoder: nn.Module,
         decoder: nn.Module,
         num_decoders: int,
-        optimiser: OPTIMISER_TYPE,
+        optimiser: OPT_TYPE,
     ):
         super().__init__(criterion=nn.CrossEntropyLoss, optimiser=optimiser)
         self.encoder = deepcopy(encoder)  # not copying encoder messes with momentum
@@ -88,7 +89,7 @@ class _MetricNetwork(_Network):
     def __init__(
         self,
         criterion: LOSS_TYPE,
-        optimiser: OPTIMISER_TYPE,
+        optimiser: OPT_TYPE,
         num_decoders: int,
         decoder_epochs: int,
         decoder_dm: DecoderData,

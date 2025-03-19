@@ -1,11 +1,49 @@
 from lightning import LightningDataModule
 import torch
+import torchvision.datasets as torchdata
 from torch.nn.functional import one_hot
 from torch.utils.data import DataLoader
 from torchvision.datasets import VisionDataset
 from torchvision.transforms import v2
 
-from utils import DATASET_TYPE, new_labels
+from utils import new_labels
+
+
+class SZT(VisionDataset):
+    classes = [0, 1]  # binary classification
+    training_file = "data/SZT.pt"
+
+    def __init__(
+        self,
+        root,
+        train: bool,  # currently useless
+        transform=None,
+        target_transform=None,
+        download: bool = False,  # only for compatibility
+    ):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+        self.data: torch.Tensor
+        self.data, self.targets = torch.load(self.training_file)
+        self.targets: torch.Tensor = self.targets.long()
+
+    def __getitem__(self, index):
+        # treat the data as images
+        img, target = self.data[index].unsqueeze(dim=0), self.targets[index]
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        return img, target
+
+    def __len__(self):
+        return self.data.size(0)
+
+
+# has to be after definition of SZT
+DATASET_TYPE = type[torchdata.MNIST | torchdata.FashionMNIST | torchdata.CIFAR10 | SZT]
 
 
 class RelabeledDataset(VisionDataset):

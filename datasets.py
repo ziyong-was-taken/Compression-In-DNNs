@@ -14,20 +14,10 @@ class RelabeledDataset(VisionDataset):
     def __init__(self, dataset: VisionDataset, new_labels: torch.Tensor):
         self.dataset = dataset
         self.new_labels = new_labels
-        self._cache = {}
-        self._cache_size = min(1000, len(dataset))
 
     def __getitem__(self, index):
-        # return cached item if available
-        if index in self._cache:
-            item = self._cache[index]
-        else:
-            # get item from dataset, relabel, and cache it (if space allows)
-            data, _ = self.dataset[index]
-            item = (data, self.new_labels[index])
-            if len(self._cache) < min(1000, len(self.dataset)):
-                self._cache[index] = item
-        return item
+        data, _ = self.dataset[index]
+        return data, self.new_labels[index]
 
     def __len__(self):
         return len(self.dataset)

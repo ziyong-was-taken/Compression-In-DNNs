@@ -2,10 +2,14 @@ import os
 
 from lightning import Trainer, seed_everything
 from lightning.pytorch.loggers import CSVLogger
+from torch import nn, optim
+import torchvision.datasets as torchdata
 
-from datasets import DataModule, DecoderData
+import datasets
+from datasets import DataModule, DecoderData, DATASET_TYPE
 import networks
-from utils import convert_to_classes, get_args
+from networks import NL_TYPE, LOSS_TYPE, OPT_TYPE
+from utils import get_args
 
 
 if __name__ == "__main__":
@@ -13,9 +17,12 @@ if __name__ == "__main__":
     seed_everything(seed=0, workers=True)
 
     # convert strings to class constructors
-    dataset, nonlinearity, criterion, optimiser = convert_to_classes(
-        args.dataset, args.nonlinearity, args.loss, args.optimiser
+    dataset: DATASET_TYPE = getattr(  # fallback to custom datasets
+        torchdata, args.dataset, getattr(datasets, args.dataset)
     )
+    nonlinearity: NL_TYPE = getattr(nn, args.nonlinearity)
+    criterion: LOSS_TYPE = getattr(nn, args.loss + "Loss")
+    optimiser: OPT_TYPE = getattr(optim, args.optimiser)
 
     # setup main datamodule
     dm = DataModule(dataset, data_dir="data", batch_size=args.batch_size)

@@ -2,15 +2,6 @@ import argparse
 import math
 
 import torch
-from torch import nn, optim
-from torchvision import datasets
-
-
-# constants for type hinting
-DATASET_TYPE = type[datasets.MNIST | datasets.FashionMNIST | datasets.CIFAR10]
-NL_TYPE = type[nn.ReLU | nn.Tanh]
-LOSS_TYPE = type[nn.CrossEntropyLoss | nn.MSELoss]
-OPTIMISER_TYPE = type[optim.AdamW | optim.Adam | optim.SGD]
 
 
 # defaults for command line arguments
@@ -26,7 +17,7 @@ def get_args():
     -m, --model: model to use
     -w, --widths: widths of hidden layers of MLP
     -nl, --nonlinearity: nonlinearity used in hidden layers of MLP
-    --dataset: dataset to use
+    -d, --dataset: dataset to use
     -opt, --optimiser: optimiser to use
     --loss: loss function to use
     --epochs: number of epochs to train the model
@@ -47,7 +38,7 @@ def get_args():
         "-w",
         "--widths",
         nargs="+",
-        default=[12, 10, 7, 5, 4, 3, 2],  # same model as ib-2017
+        default=[10, 7, 5, 4, 3],  # same model as Schwartz-Ziv & Tishby (2017)
         type=int,
         help="widths of hidden layers of MLP, has no effect on ConvNeXt and ResNet (yet)",
         metavar="WIDTH",
@@ -63,9 +54,10 @@ def get_args():
         ),
     )
     parser.add_argument(
+        "-d",
         "--dataset",
-        default="MNIST",
-        choices=["MNIST", "CIFAR10", "FashionMNIST"],
+        default="SZT",
+        choices=["MNIST", "CIFAR10", "FashionMNIST", "SZT"],
         help="dataset to use, case-sensitive",
     )
     parser.add_argument(
@@ -88,18 +80,6 @@ def get_args():
     return parser.parse_args()
 
 
-def convert_to_classes(
-    dataset_name, nonlinearity_name, loss_name, optimiser_name
-) -> tuple[DATASET_TYPE, NL_TYPE, LOSS_TYPE, OPTIMISER_TYPE]:
-    """Convert string names to classes"""
-    return (
-        getattr(datasets, dataset_name),
-        getattr(nn, nonlinearity_name),
-        getattr(nn, loss_name + "Loss"),
-        getattr(optim, optimiser_name),
-    )
-
-
 def new_labels(labels: torch.Tensor, num_classes: int):
     r"""
     Generate random relabeling `N` of the data where `N[i,:]` are the new labels of the `i`th sample.
@@ -115,7 +95,7 @@ def new_labels(labels: torch.Tensor, num_classes: int):
     # compute ⌊log_{|Y|}(max{|X_y| : y ∈ Y} - 1)⌋ + 1 = ⌈log_{|Y|}(max{|X_y| : y ∈ Y})⌉
     num_digits = math.ceil(math.log(labels.bincount().max().item(), num_classes))
 
-    # enumerate samples of the same class 
+    # enumerate samples of the same class
     idcs = torch.zeros_like(labels)
     for y in range(num_classes):
         mask = labels == y

@@ -2,6 +2,7 @@ from collections import OrderedDict
 from copy import deepcopy
 
 from lightning import LightningModule, Trainer
+from lightning.pytorch.callbacks import EarlyStopping
 import torch
 from torch import nn, optim
 from torch.utils.hooks import RemovableHandle
@@ -42,7 +43,7 @@ class _Network(LightningModule):
         """Compute and log average training loss"""
         inputs, targets = batch
         loss = self.criterion()(self(inputs), targets)
-        self.log("train_loss", loss, on_step=False, on_epoch=True)
+        self.log("train_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
         return loss
 
     def configure_optimizers(self):
@@ -141,6 +142,7 @@ class _MetricNetwork(_Network):
 
             # only update class counts on first epoch
             if self.current_epoch == 0:
+                self.class_counts = self.class_counts.to(targets)
                 self.class_counts += targets.sum(dim=0)
 
             # update other metrics
@@ -193,6 +195,7 @@ class _MetricNetwork(_Network):
             logger=False,  # don't write (but do store) training losses
             enable_checkpointing=False,  # don't save checkpoints
             deterministic=True,
+            callbacks=[EarlyStopping(monitor="train_loss")],
         )
         decoder_trainer.fit(decoders, datamodule=self.decoder_dm)
         v_info = decoder_trainer.logged_metrics["train_loss"]

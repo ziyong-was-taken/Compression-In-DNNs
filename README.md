@@ -67,7 +67,7 @@ The code consists of four main Python modules and one Jupyter notebook:
 - `main.py`: "glue code" which sets up the dataset(s), then creates and trains the model
 - `datasets.py`: logic for loading and transforming the dataset(s)
 - `networks.py`: the meat of the project; see [Implementation Details](#implementation-details) for more details
-- `plots.ipynb`: notebook for creating plots using data
+- `plots.ipynb`: notebook for creating plots
 
 When using a dataset for the first time, Lightning will download it into `data/`.
 During training run $i$, Lightning stores model checkpoints in `lightning_logs/version_`$2i$`/checkpoints/`

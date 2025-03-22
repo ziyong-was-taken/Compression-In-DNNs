@@ -112,7 +112,7 @@ class DataModule(LightningDataModule):
         )
 
 
-class DecoderData(DataModule):
+class DIBData(DataModule):
     def __init__(
         self,
         dataset: DATASET_TYPE,

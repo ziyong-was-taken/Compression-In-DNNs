@@ -7,7 +7,7 @@ import torch
 # defaults for command line arguments
 EPOCHS = 5
 BATCH_SIZE = 64
-DECODER_EPOCHS = 1
+DIB_EPOCHS = 1
 
 
 def get_args():
@@ -22,8 +22,8 @@ def get_args():
     --loss: loss function to use
     --epochs: number of epochs to train the model
     -bs, --batch-size: batch size
-    --decoder-epochs: number of epochs to train the decoder
-    --decoder-batch-size: batch size for the decoder
+    --dib-epochs: number of epochs to train the DIB network
+    --dib-batch-size: batch size for the DIB network
     """
 
     parser = argparse.ArgumentParser()
@@ -75,8 +75,8 @@ def get_args():
     )
     parser.add_argument("--epochs", default=EPOCHS, type=int)
     parser.add_argument("-bs", "--batch-size", default=BATCH_SIZE, type=int)
-    parser.add_argument("--decoder-epochs", default=DECODER_EPOCHS, type=int)
-    parser.add_argument("--decoder-batch-size", default=BATCH_SIZE, type=int)
+    parser.add_argument("--dib-epochs", default=DIB_EPOCHS, type=int)
+    parser.add_argument("--dib-batch-size", default=BATCH_SIZE, type=int)
     return parser.parse_args()
 
 
@@ -93,13 +93,13 @@ def new_labels(labels: torch.Tensor, num_classes: int):
     assert torch.max(labels) < num_classes, "labels ⊈ {0,…,num_classes}"
 
     # compute ⌊log_{|Y|}(max{|X_y| : y ∈ Y} - 1)⌋ + 1 = ⌈log_{|Y|}(max{|X_y| : y ∈ Y})⌉
-    num_digits = math.ceil(math.log(labels.bincount().max().item(), num_classes))
+    num_digits = math.ceil(math.log(labels.bincount().max(), num_classes))
 
     # enumerate samples of the same class
     idcs = torch.zeros_like(labels)
     for y in range(num_classes):
         mask = labels == y
-        if (count := mask.sum().item()) > 0:
+        if (count := mask.sum()) > 0:
             idcs[mask] = torch.arange(0, count)
 
     # base |Y| representation of indices padded with 0s to num_digits digits

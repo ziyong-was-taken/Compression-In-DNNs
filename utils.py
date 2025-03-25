@@ -5,9 +5,9 @@ import torch
 
 
 # defaults for command line arguments
-EPOCHS = 5
-BATCH_SIZE = 64
-DIB_EPOCHS = 1
+EPOCHS = 1000
+BATCH_SIZE = 1024
+DIB_EPOCHS = 200
 
 
 def get_args():

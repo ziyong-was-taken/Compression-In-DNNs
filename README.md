@@ -9,12 +9,11 @@ It is mainly implemented using [(PyTorch) Lightning](https://lightning.ai/docs/p
 - [Usage](#usage)
   - [Requirements](#requirements)
   - [Flags](#flags)
-- [Documentation](#documentation)
-- [Implementation Details](#implementation-details)
+- [Code Structure](#code-structure)
+- [Algorithms](#algorithms)
   - [Modified Algorithm 1](#modified-algorithm-1)
   - [NC1 Computation](#nc1-computation)
   - [DIB Computation](#dib-computation)
-  - [Rank](#rank)
 
 ## Usage
 
@@ -32,7 +31,7 @@ python main.py
 
 ### Requirements
 
-- `lightning>=2.5.0`: [(PyTorch) Lightning](https://lightning.ai/docs/pytorch/stable/) is the main framework used
+- `lightning>=2.5.1`: [(PyTorch) Lightning](https://lightning.ai/docs/pytorch/stable/) is the main framework used
 - `torchvision>=0.21.0`: datasets and models are imported from [torchvision](https://pytorch.org/vision/stable/index.html)
 - `ipykernel>=6.29.5`: necessary to run Jupyter notebook
 - `matplotlib>=3.10.1`: used to create plots
@@ -53,29 +52,29 @@ python main.py
   - `ConvNeXt`: the [ConvNeXt-T architecture](https://pytorch.org/vision/0.21/models/generated/torchvision.models.convnext_tiny.html) from [A ConvNet for the 2020s](https://openaccess.thecvf.com/content/CVPR2022/html/Liu_A_ConvNet_for_the_2020s_CVPR_2022_paper.html)
   - `ResNet`: the [ResNet-18 architecture](https://pytorch.org/vision/0.21/models/generated/torchvision.models.resnet18.html) from [Deep Residual Learning for Image Recognition](https://openaccess.thecvf.com/content_cvpr_2016/html/He_Deep_Residual_Learning_CVPR_2016_paper.html)
 - supported datasets (case-sensitive):
+  - `SZT`: the dataset used by Schwartz-Ziv & Tishby (2017) in their paper [Opening the Black Box of Deep Neural Networks via Information](https://arxiv.org/abs/1703.00810)
   - `MNIST`: [MNIST](http://yann.lecun.com/exdb/mnist/)
   - `CIFAR10`: [CIFAR-10](https://www.cs.toronto.edu/~kriz/cifar.html)
   - `FashionMNIST`: [Fashion-MNIST](https://github.com/zalandoresearch/fashion-mnist)
 - for a full list of flags, run `python main.py --help`
 - further information is also available in the `get_args()` function of `utils.py`
 
-## Documentation
+## Code Structure
 
 The code consists of four main Python modules and one Jupyter notebook:
 
 - `utils.py`: contains the command line flag parser and a slightly modified version of Algorithm 1 of "Learning Optimal Representations with the Decodable Information Bottleneck" (see [Modified Algorithm 1](#modified-algorithm-1))
 - `main.py`: "glue code" which sets up the dataset(s), then creates and trains the model
 - `datasets.py`: logic for loading and transforming the dataset(s)
-- `networks.py`: the meat of the project; see [Implementation Details](#implementation-details) for more details
+- `networks.py`: the meat of the project; see [Algorithms](#algorithms) for more details
 - `plots.ipynb`: notebook for creating plots
 
 When using a dataset for the first time, Lightning will download it into `data/`.
-During training run $i$, Lightning stores model checkpoints in `lightning_logs/version_`$2i$`/checkpoints/`
-(as well as duplicate checkpoints in `lightning_logs/version_`$2i+1$`/checkpoints/` due to a bug when training nested models).
-The metrics for each epoch are stored in `lightning_logs/version_`$2i$`/metrics.csv`
-and the hyperparameters in `lightning_logs/version_`$2i$`/hparams.yaml`.
+During training run $i$, Lightning stores model checkpoints for the main network in `lightning_logs/version_`$2i$`/checkpoints/`
+(as well as duplicate checkpoints in `lightning_logs/version_`$2i+1$`/checkpoints/` due to a bug when training nested models) and model checkpoints for the DIB network in `lightning_logs/checkpoints`.
+The metrics for each epoch are stored in `lightning_logs/version_`$2i$`/metrics.csv`.
 
-## Implementation Details
+## Algorithms
 
 Metrics are computed after each epoch using the `on_train_epoch_end` callback.
 
@@ -129,23 +128,21 @@ The new sample labels are then [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] and [0, 1, 2
     \end{align*}
     $$
   - thus, $Σ_W^l = G^l/N - \bar{\boldsymbol μ}^l \bar{\boldsymbol μ}^{l⊤} - Σ_B^l$
-- finally, since $\operatorname{tr}(Σ_W^l Σ_B^{l+}) = \operatorname{tr}(Σ_B^{l+} Σ_W^l)$, use `torch.linalg.lstsq(Σ_B^l, Σ_W^l)` to compute $Σ_B^{l+} Σ_W^l$
+  - finally, compute $\operatorname{tr}(Σ_W^l Σ_B^{l+}) = \operatorname{tr}(Σ_B^{l+} Σ_W^l)$ by solving the least squares problem
+    $$ X^* = \min_X \lVert Σ_B^l X - Σ_W^l \rVert_F $$
+    and then computing $\operatorname{tr}(X^*)$
 
 ### DIB Computation
 
-- compute new labels for all samples using [modified Algorithm 1](#modified-algorithm-1)
-- for each new label, create a copy of the decoder $D$ returned by `model.get_encoder_decoder()`
-- combine the encoder $E$ and decoders $D_1, D_2, \dots$ into a single model $M$
-  <!---->
-  ```plaintext
-         E
-  M =  / | \
-      D₁ D₂ …
-  ```
-  <!---->
-- train $M$ using average cross-entropy loss over the decoder heads
-- DIB is final training loss of $M$
-
-### Rank
-
-- TODO
+1. compute new labels for all samples using [modified Algorithm 1](#modified-algorithm-1)
+2. for each new labelling of the samples, create a copy of the decoder $D$ returned by `model.get_encoder_decoder()`
+3. combine the encoder $E$ and decoders $D_1, D_2, \dots$ into a single model $M$
+   <!---->
+   ```plaintext
+          E
+   M =  / | \
+       D₁ D₂ …
+   ```
+   <!---->
+4. train $M$ using average cross-entropy loss over the decoder heads
+5. return the final training loss of $M$

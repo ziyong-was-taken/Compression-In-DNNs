@@ -3,7 +3,7 @@ channels:
   - conda-forge
 dependencies:
   - ipykernel>=6.29.5
-  - lightning>=2.5.0
+  - lightning>=2.5.1
   - matplotlib>=3.10.1
   - pandas>=2.2.3
   - torchvision>=0.21.0

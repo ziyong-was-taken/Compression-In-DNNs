@@ -57,16 +57,16 @@ if __name__ == "__main__":
     if cuda.is_available():
         model.compile()
 
-    # create trainer (cannot use multiple devices due to nested training)
+    # create trainer for main network
     logger = CSVLogger(os.getcwd())
     trainer = Trainer(
-        devices=1,
+        devices=1,  # only one device due to nested training
         max_epochs=args.epochs,
         logger=logger,
         deterministic=True,
     )
 
     # TODO: tune hyperparameters (batch size, learning rate)
-    
+
     # train model
     trainer.fit(model, datamodule=dm)

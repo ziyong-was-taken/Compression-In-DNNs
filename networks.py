@@ -10,6 +10,7 @@ from torchvision.models import convnext_tiny, resnet18
 
 from datasets import DIBData
 
+
 NL_TYPE = type[nn.ReLU | nn.Tanh]
 LOSS_TYPE = type[nn.CrossEntropyLoss | nn.MSELoss]
 OPT_TYPE = type[optim.AdamW | optim.Adam | optim.SGD]
@@ -22,12 +23,15 @@ class _Network(LightningModule):
     Simply implement `_forward` and the blueprint handles the rest.
     """
 
-    def __init__(self, criterion: LOSS_TYPE, optimiser: OPT_TYPE):
+    def __init__(
+        self, criterion: LOSS_TYPE, optimiser: OPT_TYPE, learning_rate: float = 1e-5
+    ):
         super().__init__()
 
         # store architecture parameters
         self.criterion = criterion
         self.optimiser = optimiser
+        self.learning_rate = learning_rate
 
         # final softmax layer
         self.softmax = nn.Softmax(dim=-1)
@@ -48,7 +52,7 @@ class _Network(LightningModule):
         return loss
 
     def configure_optimizers(self):
-        return self.optimiser(self.parameters())
+        return self.optimiser(self.parameters(), lr=self.learning_rate)
 
 
 class DIBNetwork(_Network):
@@ -58,8 +62,13 @@ class DIBNetwork(_Network):
         decoder: nn.Module,
         num_decoders: int,
         optimiser: OPT_TYPE,
+        learning_rate: float,
     ):
-        super().__init__(criterion=nn.CrossEntropyLoss, optimiser=optimiser)
+        super().__init__(
+            criterion=nn.CrossEntropyLoss,
+            optimiser=optimiser,
+            learning_rate=learning_rate,
+        )
         self.encoder = deepcopy(encoder)  # not copying encoder messes with momentum
         self.decoders = nn.ModuleList(deepcopy(decoder) for _ in range(num_decoders))
 
@@ -95,7 +104,7 @@ class DIBNetwork(_Network):
         return torch.stack(outputs, dim=-1)
 
     def configure_optimizers(self):
-        return self.optimiser(self.decoders.parameters())
+        return self.optimiser(self.decoders.parameters(), lr=self.learning_rate)
 
 
 class _MetricNetwork(_Network):
@@ -201,30 +210,31 @@ class _MetricNetwork(_Network):
         # reset NC metrics for next epoch (class counts don't change)
         self.layer_metrics.clear()
 
-        # initialise DIB network
-        if self.dib_net is None:
-            self.dib_net = DIBNetwork(  # TODO: try different block indices
-                *self.get_encoder_decoder(block_idx=3),
-                self.num_decoders,
-                self.optimiser,
-            )
-            if torch.cuda.is_available():
-                self.dib_net.compile()
+        # # initialise DIB network
+        # if self.dib_net is None:
+        #     self.dib_net = DIBNetwork(  # TODO: try different block indices
+        #         *self.get_encoder_decoder(block_idx=3),
+        #         self.num_decoders,
+        #         self.optimiser,
+        #         self.learning_rate,
+        #     )
+        #     if torch.cuda.is_available():
+        #         self.dib_net.compile()
 
-        # train DIB network
-        dib_trainer = Trainer(
-            devices=10,
-            max_epochs=self.dib_epochs,
-            logger=False,  # don't write (but do store) training losses
-            default_root_dir="lightning_logs",
-            deterministic=True,
-            callbacks=[EarlyStopping(monitor="train_loss")],
-        )
-        dib_trainer.fit(self.dib_net, datamodule=self.dib_dm)
+        # # train DIB network
+        # dib_trainer = Trainer(
+        #     devices=10,
+        #     max_epochs=self.dib_epochs,
+        #     logger=False,  # don't write (but do store) training losses
+        #     default_root_dir="lightning_logs",
+        #     deterministic=True,
+        #     callbacks=[EarlyStopping(monitor="train_loss")],
+        # )
+        # dib_trainer.fit(self.dib_net, datamodule=self.dib_dm)
 
-        # log final training loss, i.e., decodable information
-        v_info = dib_trainer.logged_metrics["train_loss"]
-        self.log("v_info", v_info)
+        # # log final training loss, i.e., decodable information
+        # v_info = dib_trainer.logged_metrics["train_loss"]
+        # self.log("v_info", v_info)
 
     def get_encoder_decoder(self, block_idx) -> tuple[nn.Module, nn.Module]:
         """

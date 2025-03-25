@@ -2,6 +2,7 @@ import os
 
 from lightning import Trainer, seed_everything
 from lightning.pytorch.loggers import CSVLogger
+from lightning.pytorch.tuner import Tuner
 from torch import nn, optim, cuda
 import torchvision.datasets as torchdata
 
@@ -25,18 +26,12 @@ if __name__ == "__main__":
     optimiser: OPT_TYPE = getattr(optim, args.optimiser)
 
     # setup main datamodule
-    dm = DataModule(dataset, data_dir="data", batch_size=args.batch_size)
+    dm = DataModule(dataset, data_dir="data")
     dm.prepare_data()
     dm.setup("fit")
 
     # setup DIB datamodule
-    dib_dm = DIBData(
-        dataset,
-        data_dir="data",
-        batch_size=args.dib_batch_size,
-        base_expansion=dm.base_expansion,
-        num_classes=dm.num_classes,
-    )
+    dib_dm = DIBData(dm)
     dib_dm.prepare_data()
     dib_dm.setup("fit")
 
@@ -57,16 +52,26 @@ if __name__ == "__main__":
     if cuda.is_available():
         model.compile()
 
-    # create trainer for main network
-    logger = CSVLogger(os.getcwd())
-    trainer = Trainer(
-        devices=1,  # only one device due to nested training
-        max_epochs=args.epochs,
-        logger=logger,
-        deterministic=True,
+    # tune batch size
+    dummy_trainer = Trainer(
+        devices=1, max_epochs=-1, barebones=True, deterministic=True
     )
+    tuner = Tuner(dummy_trainer)
+    tuner.scale_batch_size(model, datamodule=dm, batch_arg_name="batch_size")
+    dib_dm.batch_size = dm.batch_size // args.num_devices
 
-    # TODO: tune hyperparameters (batch size, learning rate)
+    # # tune learning rate (broken for now)
+    # lr_finder = tuner.lr_find(
+    #     model, datamodule=dm, update_attr=True, attr_name="learning_rate"
+    # )
+    # lr_finder.plot(suggest=True, show=True)
+    # print("Learning rate:", model.learning_rate)
 
     # train model
-    trainer.fit(model, datamodule=dm)
+    # logger = CSVLogger(os.getcwd())
+    # Trainer(
+    #     devices=1,  # only one device due to nested training
+    #     max_epochs=args.epochs,
+    #     logger=logger,
+    #     deterministic=True,
+    # ).fit(model, datamodule=dm)

@@ -18,10 +18,9 @@ class SZT(VisionDataset):
         root,
         train: bool,  # currently useless
         transform=None,
-        target_transform=None,
         download: bool = False,  # only for compatibility
     ):
-        super().__init__(root, transform=transform, target_transform=target_transform)
+        super().__init__(root, transform=transform)
         self.data: torch.Tensor
         self.data, self.targets = torch.load(self.training_file)
         self.targets: torch.Tensor = self.targets.long()
@@ -29,13 +28,8 @@ class SZT(VisionDataset):
     def __getitem__(self, index):
         # treat the data as images
         img, target = self.data[index].unsqueeze(dim=0), self.targets[index]
-
         if self.transform is not None:
             img = self.transform(img)
-
-        if self.target_transform is not None:
-            target = self.target_transform(target)
-
         return img, target
 
     def __len__(self):
@@ -62,12 +56,12 @@ class RelabeledDataset(VisionDataset):
 
 
 class DataModule(LightningDataModule):
-    def __init__(self, dataset: DATASET_TYPE, data_dir: str, batch_size: int):
+    def __init__(self, dataset: DATASET_TYPE, data_dir: str):
         super().__init__()
 
         self.dataset = dataset
         self.data_dir = data_dir
-        self.batch_size = batch_size
+        self.batch_size: int = 1  # dummy value
         self.transform = v2.Compose(
             [  # TODO: image augmentation and/or normalisation
                 # v2.Resize(224),  # ResNet18 and ConvNext-Tiny expect 224x224 images
@@ -113,17 +107,9 @@ class DataModule(LightningDataModule):
 
 
 class DIBData(DataModule):
-    def __init__(
-        self,
-        dataset: DATASET_TYPE,
-        data_dir: str,
-        batch_size: int,
-        base_expansion: torch.Tensor,
-        num_classes: int,
-    ):
-        super().__init__(dataset, data_dir, batch_size)
-        self.base_expansion = base_expansion
-        self.num_classes = num_classes
+    def __init__(self, datamodule: DataModule):
+        super().__init__(datamodule.dataset, datamodule.data_dir)
+        self.base_expansion = datamodule.base_expansion
 
     def setup(self, stage):
         """Create the train dataset with new labels."""

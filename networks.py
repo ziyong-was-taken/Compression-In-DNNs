@@ -68,21 +68,21 @@ class DIBNetwork(_Network):
         for param in self.encoder.parameters():
             param.requires_grad = False
 
-    @torch.no_grad()
     def on_fit_start(self):
         """
         Reset decoder weights before training.
         See https://discuss.pytorch.org/t/how-to-re-set-alll-parameters-in-a-network/20819
         """
 
-        def weight_reset(m: nn.Module):
-            m_reset_parameters = getattr(
+        @torch.no_grad()
+        def reset_weights(m: nn.Module):
+            reset_parameters = getattr(
                 m, "reset_parameters", getattr(m, "_reset_parameters", None)
             )
-            if callable(m_reset_parameters):
-                m_reset_parameters()
+            if callable(reset_parameters):
+                reset_parameters()
 
-        self.decoders.apply(weight_reset)
+        self.decoders.apply(reset_weights)
 
     def _forward(self, x):
         encoded = self.encoder(x)
@@ -216,7 +216,7 @@ class _MetricNetwork(_Network):
             devices=10,
             max_epochs=self.dib_epochs,
             logger=False,  # don't write (but do store) training losses
-            enable_checkpointing=False,  # don't save checkpoints
+            default_root_dir="lightning_logs",
             deterministic=True,
             callbacks=[EarlyStopping(monitor="train_loss")],
         )

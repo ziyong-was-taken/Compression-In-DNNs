@@ -7,4 +7,4 @@ dependencies:
   - matplotlib>=3.10.1
   - pandas>=2.2.3
   - torchvision>=0.21.0
-  # - torchvision>=0.21.0=*cuda* # CUDA version
+  # - torchvision>=0.21.0=cuda* # uncomment for CUDA version

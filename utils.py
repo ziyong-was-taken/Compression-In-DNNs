@@ -83,7 +83,7 @@ def get_args():
     parser.add_argument("-lr", "--learning-rate", default=LR, type=float)
     parser.add_argument(
         "--num-devices",
-        default=10,
+        default=1,
         type=int,
         help="number of devices used to train the DIB network",
     )

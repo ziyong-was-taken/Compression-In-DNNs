@@ -10,16 +10,18 @@ import datasets
 from datasets import DATASET_TYPE, DIBData, DataModule
 import networks
 from networks import LOSS_TYPE, NL_TYPE, OPT_TYPE
-from utils import ComputeDIB, ComputeNC1, get_args, new_labels
+from utils import ComputeDIB, ComputeNC1, get_args, base_expand
 
 if __name__ == "__main__":
     args = get_args()
     seed_everything(seed=0, workers=True)
 
     # convert strings to class constructors
-    dataset: DATASET_TYPE = getattr(  # fallback to custom datasets
-        torchdata, args.dataset, getattr(datasets, args.dataset)
-    )
+    dataset: DATASET_TYPE
+    if hasattr(torchdata, args.dataset):
+        dataset = getattr(torchdata, args.dataset)
+    else: # fallback to custom dataset
+        dataset = getattr(datasets, args.dataset)
     nonlinearity: NL_TYPE = getattr(nn, args.nonlinearity)
     criterion: LOSS_TYPE = getattr(nn, args.loss + "Loss")
     optimiser: OPT_TYPE = getattr(optim, args.optimiser)
@@ -30,7 +32,7 @@ if __name__ == "__main__":
     dm.setup("fit")
 
     # setup DIB datamodule
-    new_labels = new_labels(dm.labels, dm.num_classes)
+    new_labels = base_expand(dm.labels, dm.num_classes)
     dib_dm = DIBData(dm, new_labels)
     dib_dm.prepare_data()
     dib_dm.setup("fit")

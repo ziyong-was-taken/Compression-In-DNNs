@@ -1,20 +1,17 @@
 from collections import OrderedDict
 from copy import deepcopy
 
-from lightning import LightningModule, Trainer
-from lightning.pytorch.callbacks import EarlyStopping
+from lightning import LightningModule
 import torch
 from torch import nn, optim
 from torch.utils.hooks import RemovableHandle
 from torchvision.models import convnext_tiny, resnet18
 
-from datasets import DIBData
-
 
 NL_TYPE = type[nn.ReLU | nn.Tanh]
 LOSS_TYPE = type[nn.CrossEntropyLoss | nn.MSELoss]
 OPT_TYPE = type[optim.AdamW | optim.Adam | optim.SGD]
-HPARAM_TYPE = tuple[LOSS_TYPE, OPT_TYPE, int, int, DIBData]
+HPARAM_TYPE = tuple[LOSS_TYPE, OPT_TYPE, float]
 
 
 class _Network(LightningModule):
@@ -23,9 +20,7 @@ class _Network(LightningModule):
     Simply implement `_forward` and the blueprint handles the rest.
     """
 
-    def __init__(
-        self, criterion: LOSS_TYPE, optimiser: OPT_TYPE, learning_rate: float = 1e-5
-    ):
+    def __init__(self, criterion: LOSS_TYPE, optimiser: OPT_TYPE, learning_rate: float):
         super().__init__()
 
         # store architecture parameters
@@ -107,45 +102,19 @@ class DIBNetwork(_Network):
         return self.optimiser(self.decoders.parameters(), lr=self.learning_rate)
 
 
-class _MetricNetwork(_Network):
+class MetricNetwork(_Network):
     """
-    A blueprint which extends `_Network` by also
-    computing the metrics at the end of each epoch.
+    A blueprint which extends `_Network` with helper functions to compute NC1 and DIB
     """
 
-    def __init__(
-        self,
-        criterion: LOSS_TYPE,
-        optimiser: OPT_TYPE,
-        num_decoders: int,
-        dib_epochs: int,
-        dib_dm: DIBData,
-        num_classes: int,
-    ):
-        super().__init__(criterion, optimiser)
-
-        # store DIB network parameters
-        self.num_decoders = num_decoders
-        self.dib_epochs = dib_epochs
-        self.dib_dm = dib_dm
-        self.dib_net = None
-
-        # store handles to hooks (not strictly necessary, but good practice)
+    def __init__(self, hyperparams: HPARAM_TYPE):
+        super().__init__(*hyperparams)
         self.hook_handles: dict[str, RemovableHandle] = {}
-
-        # storage for NC metrics
-        # zˡ: size of flattened activations of layer l
-        # layer_metrics[l]: ((num_classes + zˡ) × zˡ)
-        #     layer_metrics[l][:num_classes]: class sums of activations (num_classes × zˡ)
-        #     layer_metrics[l][num_classes:]: gram matrix (zˡ × zˡ)
-        # TODO: convert dicts to buffers
-        self.num_classes = num_classes
-        self.class_counts = nn.Buffer(torch.zeros(num_classes))
-        self.batch_layer_outputs: dict[str, torch.Tensor] = {}
-        self.layer_metrics: dict[str, torch.Tensor] = {}
+        self.batch_activations: dict[str, torch.Tensor] = {}
 
     def _register_hooks(self, new_hooks: dict[str, nn.Module]):
         """Register forward hooks for NC metrics"""
+
         # remove old hooks (there shouldn't be any)
         for handle in self.hook_handles.values():
             handle.remove()
@@ -154,7 +123,7 @@ class _MetricNetwork(_Network):
         # get_hook: layer_name -> (hook: module, args, output -> None)
         def get_hook(name):
             def hook(_module, _args, output):
-                self.batch_layer_outputs[name] = output
+                self.batch_activations[name] = output
 
             return hook
 
@@ -162,79 +131,6 @@ class _MetricNetwork(_Network):
         new_hooks |= {"nc_output": self.softmax}
         for name, module in new_hooks.items():
             self.hook_handles[name] = module.register_forward_hook(get_hook(name))
-
-    @torch.no_grad()
-    def on_train_batch_end(self, _outputs, batch: list[torch.Tensor], _batch_idx):
-        """Update NC metrics"""
-        _, targets = batch
-
-        # only update class counts on first epoch
-        if self.current_epoch == 0:
-            self.class_counts += targets.sum(dim=0)
-
-        # update other metrics
-        for layer, activations in self.batch_layer_outputs.items():
-            activations = activations.flatten(start_dim=1)
-            if layer not in self.layer_metrics:
-                act_size = activations.size(1)
-                self.layer_metrics[layer] = torch.zeros(
-                    (self.num_classes + act_size, act_size)
-                ).to(targets)
-            self.layer_metrics[layer][: self.num_classes] += targets.T @ activations
-            self.layer_metrics[layer][self.num_classes :] += activations.T @ activations
-
-    def on_train_epoch_end(self):
-        """
-        Compute and log NC metrics.
-        Also train decoders and log decodable info.
-        """
-        with torch.no_grad():
-            nc: dict[str, torch.Tensor] = {}
-            total_count = self.class_counts.sum()
-            for layer, joint_metric in self.layer_metrics.items():
-                class_sums = joint_metric[: self.num_classes]
-                class_means = class_sums / self.class_counts.unsqueeze(dim=1)
-                global_mean = class_sums.sum(dim=0) / total_count
-                centred_means = class_means - global_mean
-                between_cov = (centred_means.T @ centred_means) / self.num_classes
-                within_cov = (
-                    joint_metric[self.num_classes :] / total_count
-                    - torch.outer(global_mean, global_mean)
-                    - between_cov
-                )
-                nc[layer] = torch.linalg.lstsq(
-                    between_cov, within_cov, rcond=1e-5
-                ).solution.trace()
-        self.log_dict(nc)
-
-        # reset NC metrics for next epoch (class counts don't change)
-        self.layer_metrics.clear()
-
-        # # initialise DIB network
-        # if self.dib_net is None:
-        #     self.dib_net = DIBNetwork(  # TODO: try different block indices
-        #         *self.get_encoder_decoder(block_idx=3),
-        #         self.num_decoders,
-        #         self.optimiser,
-        #         self.learning_rate,
-        #     )
-        #     if torch.cuda.is_available():
-        #         self.dib_net.compile()
-
-        # # train DIB network
-        # dib_trainer = Trainer(
-        #     devices=10,
-        #     max_epochs=self.dib_epochs,
-        #     logger=False,  # don't write (but do store) training losses
-        #     default_root_dir="lightning_logs",
-        #     deterministic=True,
-        #     callbacks=[EarlyStopping(monitor="train_loss")],
-        # )
-        # dib_trainer.fit(self.dib_net, datamodule=self.dib_dm)
-
-        # # log final training loss, i.e., decodable information
-        # v_info = dib_trainer.logged_metrics["train_loss"]
-        # self.log("v_info", v_info)
 
     def get_encoder_decoder(self, block_idx) -> tuple[nn.Module, nn.Module]:
         """
@@ -244,11 +140,11 @@ class _MetricNetwork(_Network):
         raise NotImplementedError
 
 
-class MLP(_MetricNetwork):
+class MLP(MetricNetwork):
     def __init__(
         self, widths: list[int], nonlinearity: NL_TYPE, hyperparams: HPARAM_TYPE
     ):
-        super().__init__(*hyperparams, num_classes=widths[-1])
+        super().__init__(hyperparams)
 
         # add layers
         self.flatten = nn.Flatten()
@@ -260,7 +156,7 @@ class MLP(_MetricNetwork):
                 for in_out in zip(widths[:-2], widths[1:-1])
             ]
         )
-        self.fc = nn.Linear(widths[-2], self.num_classes)
+        self.fc = nn.Linear(widths[-2], widths[-1])
 
         # update return nodes (output hooks)
         super()._register_hooks(
@@ -278,11 +174,11 @@ class MLP(_MetricNetwork):
         return encoder, decoder
 
 
-class ConvNeXt(_MetricNetwork):
+class ConvNeXt(MetricNetwork):
     def __init__(
         self, in_shape: torch.Size, num_classes: int, hyperparams: HPARAM_TYPE
     ):
-        super().__init__(*hyperparams, num_classes)
+        super().__init__(hyperparams)
 
         # import torchvision model
         self.convnext = convnext_tiny()
@@ -321,11 +217,11 @@ class ConvNeXt(_MetricNetwork):
         return encoder, decoder
 
 
-class ResNet(_MetricNetwork):
+class ResNet(MetricNetwork):
     def __init__(
         self, in_shape: torch.Size, num_classes: int, hyperparams: HPARAM_TYPE
     ):
-        super().__init__(*hyperparams, num_classes)
+        super().__init__(hyperparams)
 
         # import torchvision model
         self.resnet = resnet18()

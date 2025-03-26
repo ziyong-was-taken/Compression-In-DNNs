@@ -1,12 +1,10 @@
 from lightning import LightningDataModule
 import torch
-import torchvision.datasets as torchdata
 from torch.nn.functional import one_hot
 from torch.utils.data import DataLoader
+import torchvision.datasets as torchdata
 from torchvision.datasets import VisionDataset
 from torchvision.transforms import v2
-
-from utils import new_labels
 
 
 class SZT(VisionDataset):
@@ -88,12 +86,11 @@ class DataModule(LightningDataModule):
                 )
                 self.input_size = base_ds[0][0].size()
                 self.num_classes = len(base_ds.classes)
-                labels = torch.as_tensor(base_ds.targets)
-                self.base_expansion = new_labels(labels, self.num_classes)
+                self.labels = torch.as_tensor(base_ds.targets)
                 self.train = RelabeledDataset(
                     dataset=base_ds,
                     # one-hot labels compatible with both MSE loss and cross-entropy loss
-                    new_labels=one_hot(labels, self.num_classes).float(),
+                    new_labels=one_hot(self.labels, self.num_classes).float(),
                 )
 
     def train_dataloader(self):
@@ -107,9 +104,9 @@ class DataModule(LightningDataModule):
 
 
 class DIBData(DataModule):
-    def __init__(self, datamodule: DataModule):
+    def __init__(self, datamodule: DataModule, new_labels: torch.Tensor):
         super().__init__(datamodule.dataset, datamodule.data_dir)
-        self.base_expansion = datamodule.base_expansion
+        self.new_labels = new_labels
 
     def setup(self, stage):
         """Create the train dataset with new labels."""
@@ -119,5 +116,5 @@ class DIBData(DataModule):
                     self.data_dir, train=True, transform=self.transform
                 )
                 self.train = RelabeledDataset(
-                    dataset=base_ds, new_labels=self.base_expansion
+                    dataset=base_ds, new_labels=self.new_labels
                 )

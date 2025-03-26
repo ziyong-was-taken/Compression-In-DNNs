@@ -2,16 +2,15 @@ import os
 
 from lightning import Trainer, seed_everything
 from lightning.pytorch.loggers import CSVLogger
-from lightning.pytorch.tuner import Tuner
-from torch import nn, optim, cuda
+from lightning.pytorch.tuner.tuning import Tuner
+from torch import cuda, nn, optim
 import torchvision.datasets as torchdata
 
 import datasets
-from datasets import DataModule, DIBData, DATASET_TYPE
+from datasets import DATASET_TYPE, DIBData, DataModule
 import networks
-from networks import NL_TYPE, LOSS_TYPE, OPT_TYPE
-from utils import get_args
-
+from networks import LOSS_TYPE, NL_TYPE, OPT_TYPE
+from utils import ComputeDIB, ComputeNC1, get_args, new_labels
 
 if __name__ == "__main__":
     args = get_args()
@@ -26,18 +25,18 @@ if __name__ == "__main__":
     optimiser: OPT_TYPE = getattr(optim, args.optimiser)
 
     # setup main datamodule
-    dm = DataModule(dataset, data_dir="data")
+    dm = DataModule(dataset, data_dir=args.data_dir)
     dm.prepare_data()
     dm.setup("fit")
 
     # setup DIB datamodule
-    dib_dm = DIBData(dm)
+    new_labels = new_labels(dm.labels, dm.num_classes)
+    dib_dm = DIBData(dm, new_labels)
     dib_dm.prepare_data()
     dib_dm.setup("fit")
 
     # create model
-    num_decoders = dm.base_expansion.size(1)
-    hyperparams = (criterion, optimiser, num_decoders, args.dib_epochs, dib_dm)
+    hyperparams = (criterion, optimiser, args.learning_rate)
     match args.model:
         case "MLP":
             model = networks.MLP(
@@ -68,10 +67,19 @@ if __name__ == "__main__":
     # print("Learning rate:", model.learning_rate)
 
     # train model
-    # logger = CSVLogger(os.getcwd())
-    # Trainer(
-    #     devices=1,  # only one device due to nested training
-    #     max_epochs=args.epochs,
-    #     logger=logger,
-    #     deterministic=True,
-    # ).fit(model, datamodule=dm)
+    logger = CSVLogger(os.getcwd())
+    Trainer(
+        devices=1,  # only one device due to nested training
+        max_epochs=args.epochs,
+        logger=logger,
+        deterministic=True,
+        callbacks=[
+            ComputeDIB(
+                num_decoders=new_labels.size(1),
+                dib_epochs=args.dib_epochs,
+                dib_dm=dib_dm,
+                num_devices=args.num_devices,
+            ),
+            ComputeNC1(dm.num_classes),
+        ],
+    ).fit(model, datamodule=dm)

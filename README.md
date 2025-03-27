@@ -17,8 +17,8 @@ It is mainly implemented using [(PyTorch) Lightning](https://lightning.ai/docs/p
 
 ## Usage
 
-The easiest way to run the code is use [conda](https://docs.conda.io/en/latest/).
-Simply create a new environment using the provided `environment.yaml` file using the following commands:
+The easiest way to run the code is to use [conda](https://conda.org/).
+Simply create a new environment using the provided `environment.yaml` file and the following commands:
 
 ```bash
 # create and activate the environment (name: master_thesis)
@@ -26,7 +26,24 @@ conda env create -f environment.yaml
 conda activate master_thesis
 
 # run the code (possibly with flags)
-python main.py
+python main.py --flag value
+
+# (optional) deactivate the environment afterwards
+conda deactivate
+```
+
+The repository also includes a minimal [micromamba-docker](https://micromamba-docker.readthedocs.io/en/latest/index.html) Dockerfile.
+Build and run the [Docker](https://www.docker.com/) image by using the following commands:
+
+```bash
+# build the Docker image (tag: master_thesis)
+docker build -t master_thesis .
+
+# run the Docker image
+docker run -it master_thesis python main.py --flag value
+
+# run the Docker image (with GPUs)
+docker run -it --gpus all master_thesis python main.py --flag value
 ```
 
 ### Requirements
@@ -39,7 +56,7 @@ python main.py
 
 ### Flags
 
-- flags include `-m` to choose the model and `-d` to choose the dataset
+- example flags include `-m` to choose the model and `-d` to choose the dataset
 - for example,
   <!---->
   ```bash
@@ -52,7 +69,7 @@ python main.py
   - `ConvNeXt`: the [ConvNeXt-T architecture](https://pytorch.org/vision/0.21/models/generated/torchvision.models.convnext_tiny.html) from [A ConvNet for the 2020s](https://openaccess.thecvf.com/content/CVPR2022/html/Liu_A_ConvNet_for_the_2020s_CVPR_2022_paper.html)
   - `ResNet`: the [ResNet-18 architecture](https://pytorch.org/vision/0.21/models/generated/torchvision.models.resnet18.html) from [Deep Residual Learning for Image Recognition](https://openaccess.thecvf.com/content_cvpr_2016/html/He_Deep_Residual_Learning_CVPR_2016_paper.html)
 - supported datasets (case-sensitive):
-  - `SZT`: the dataset used by Schwartz-Ziv & Tishby (2017) in their paper [Opening the Black Box of Deep Neural Networks via Information](https://arxiv.org/abs/1703.00810)
+  - `SZT`: the dataset used by Schwartz-Ziv & Tishby (2017) in their paper [Opening the Black Box of Deep Neural Networks via Information](https://arxiv.org/abs/1703.00810) (included in the repository)
   - `MNIST`: [MNIST](http://yann.lecun.com/exdb/mnist/)
   - `CIFAR10`: [CIFAR-10](https://www.cs.toronto.edu/~kriz/cifar.html)
   - `FashionMNIST`: [Fashion-MNIST](https://github.com/zalandoresearch/fashion-mnist)
@@ -63,10 +80,13 @@ python main.py
 
 The code consists of four main Python modules and one Jupyter notebook:
 
-- `utils.py`: contains the command line flag parser and a slightly modified version of Algorithm 1 of "Learning Optimal Representations with the Decodable Information Bottleneck" (see [Modified Algorithm 1](#modified-algorithm-1))
+- `utils.py`: contains
+  - the command line flag parser
+  - a slightly modified version of Algorithm 1 of "Learning Optimal Representations with the Decodable Information Bottleneck" (see [Modified Algorithm 1](#modified-algorithm-1))
+  - the algorithms for computing the NC1 metric and the DIB (see [Algorithms](#algorithms) for more details)
 - `main.py`: "glue code" which sets up the dataset(s), then creates and trains the model
-- `datasets.py`: logic for loading and transforming the dataset(s)
-- `networks.py`: the meat of the project; see [Algorithms](#algorithms) for more details
+- `datasets.py`: logic for loading and transforming the datasets as well as the SZT dataset
+- `networks.py`: network architectures
 - `plots.ipynb`: notebook for creating plots
 
 When using a dataset for the first time, Lightning will download it into `data/`.
@@ -76,7 +96,7 @@ The metrics for each epoch are stored in `lightning_logs/version_`$2i$`/metrics.
 
 ## Algorithms
 
-Metrics are computed after each epoch using the `on_train_epoch_end` callback.
+Both the NC1 and DIB metrics are computed after each epoch.
 
 ### Modified Algorithm 1
 

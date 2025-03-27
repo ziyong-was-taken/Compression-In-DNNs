@@ -33,11 +33,7 @@ def get_args():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "-m",
-        "--model",
-        default="MLP",
-        choices=["MLP", "ConvNeXt", "ResNet"],
-        help="model to use",
+        "-m", "--model", default="MLP", choices=["MLP", "ConvNeXt", "ResNet"]
     )
     parser.add_argument(
         "-w",
@@ -63,21 +59,13 @@ def get_args():
         "--dataset",
         default="SZT",
         choices=["MNIST", "CIFAR10", "FashionMNIST", "SZT"],
-        help="dataset to use, case-sensitive",
     )
     parser.add_argument("--data-dir", default="data")
     parser.add_argument(
-        "-opt",
-        "--optimiser",
-        default="AdamW",
-        choices=["AdamW", "Adam", "SGD"],
-        help="optimiser to use, case-sensitive",
+        "-opt", "--optimiser", default="AdamW", choices=["AdamW", "Adam", "SGD"]
     )
     parser.add_argument(
-        "--loss",
-        default="CrossEntropy",
-        choices=["CrossEntropy", "MSE"],
-        help="loss function to use, case-sensitive",
+        "--loss", default="CrossEntropy", choices=["CrossEntropy", "MSE"]
     )
     parser.add_argument("--epochs", default=EPOCHS, type=int)
     parser.add_argument("-lr", "--learning-rate", default=LR, type=float)

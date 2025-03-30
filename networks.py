@@ -1,8 +1,8 @@
 from collections import OrderedDict
 from copy import deepcopy
 
-from lightning import LightningModule
 import torch
+from lightning import LightningModule
 from torch import nn, optim
 from torch.utils.hooks import RemovableHandle
 from torchvision.models import convnext_tiny, resnet18
@@ -111,6 +111,7 @@ class MetricNetwork(_Network):
         super().__init__(*hyperparams)
         self.hook_handles: dict[str, RemovableHandle] = {}
         self.batch_activations: dict[str, torch.Tensor] = {}
+        self.num_blocks: int
 
     def _register_hooks(self, new_hooks: dict[str, nn.Module]):
         """Register forward hooks for NC metrics"""
@@ -131,6 +132,11 @@ class MetricNetwork(_Network):
         new_hooks |= {"nc_output": self.softmax}
         for name, module in new_hooks.items():
             self.hook_handles[name] = module.register_forward_hook(get_hook(name))
+
+    def _check_block_idx(self, block_idx):
+        assert block_idx < self.num_blocks, (
+            f"{type(self).__name__} only has {self.num_blocks} blocks"
+        )
 
     def get_encoder_decoder(self, block_idx) -> tuple[nn.Module, nn.Module]:
         """
@@ -162,13 +168,13 @@ class MLP(MetricNetwork):
         super()._register_hooks(
             {f"nc_layer_{i}": block.nl for i, block in enumerate(self.blocks)}
         )
+        self.num_blocks = len(self.blocks)
 
     def _forward(self, x):
         return self.fc(self.blocks(self.flatten(x)))
 
     def get_encoder_decoder(self, block_idx):
-        assert block_idx < len(self.blocks), f"MLP only has {len(self.blocks)} blocks"
-
+        super()._check_block_idx(block_idx)
         encoder = nn.Sequential(self.flatten, *self.blocks[:block_idx])
         decoder = nn.Sequential(*self.blocks[block_idx:], self.fc)
         return encoder, decoder
@@ -200,14 +206,13 @@ class ConvNeXt(MetricNetwork):
         for i, j in zip(range(4), (2, 2, 8, 2)):
             new_hooks[f"nc_layer_{i}"] = self.convnext.features[2 * i + 1][j].add
         super()._register_hooks(new_hooks)
+        self.num_blocks = len(self.convnext.features) // 2
 
     def _forward(self, x):
         return self.convnext(x)
 
     def get_encoder_decoder(self, block_idx):
-        num_blocks = len(self.convnext.features) // 2
-        assert block_idx < num_blocks, f"ConvNeXt only has {num_blocks} blocks"
-
+        super()._check_block_idx(block_idx)
         encoder = self.convnext.features[: 2 * block_idx]
         decoder = nn.Sequential(
             *self.convnext.features[2 * block_idx :],
@@ -244,13 +249,13 @@ class ResNet(MetricNetwork):
             layer = getattr(self.resnet, f"layer{i + 1}")
             new_hooks[f"nc_layer_{i}"] = layer[1].relu
         super()._register_hooks(new_hooks)
+        self.num_blocks = 4
 
     def _forward(self, x):
         return self.resnet(x)
 
     def get_encoder_decoder(self, block_idx):
-        assert block_idx < 5, "ResNet only has 4 blocks"
-
+        super()._check_block_idx(block_idx)
         encoder = nn.Sequential(
             self.resnet.conv1,
             self.resnet.bn1,

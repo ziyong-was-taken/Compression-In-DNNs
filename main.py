@@ -1,16 +1,16 @@
 import os
 
+import torchvision.datasets as torchdata
 from lightning import Trainer, seed_everything
 from lightning.pytorch.loggers import CSVLogger
 from lightning.pytorch.tuner.tuning import Tuner
-from torch import cuda, nn, optim
-import torchvision.datasets as torchdata
+from torch import nn, optim
 
 import datasets
-from datasets import DATASET_TYPE, DIBData, DataModule
 import networks
+from datasets import DATASET_TYPE, DataModule, DIBData
 from networks import LOSS_TYPE, NL_TYPE, OPT_TYPE
-from utils import ComputeDIB, ComputeNC1, get_args, base_expand
+from utils import ComputeDIB, ComputeNC1, base_expand, get_args
 
 args = get_args()
 seed_everything(seed=0, workers=True)
@@ -26,7 +26,7 @@ criterion: LOSS_TYPE = getattr(nn, args.loss + "Loss")
 optimiser: OPT_TYPE = getattr(optim, args.optimiser)
 
 # setup main datamodule
-dm = DataModule(dataset, data_dir=args.data_dir)
+dm = DataModule(dataset, data_dir=args.data_dir, batch_size=args.batch_size)
 dm.prepare_data()
 dm.setup("fit")
 
@@ -49,16 +49,16 @@ match args.model:
         model = getattr(networks, args.model)(
             dm.input_size, dm.num_classes, hyperparams
         )
-if cuda.is_available():
-    model.compile()
 
-# tune batch size
+# create tuner
 dummy_trainer = Trainer(devices=1, max_epochs=-1, barebones=True, deterministic=True)
 tuner = Tuner(dummy_trainer)
-tuner.scale_batch_size(model, datamodule=dm, batch_arg_name="batch_size")
-dib_dm.batch_size = dm.batch_size // args.num_devices
 
-# # tune learning rate (broken for now)
+# # tune batch size
+# tuner.scale_batch_size(model, datamodule=dm, batch_arg_name="batch_size")
+# dib_dm.batch_size = dm.batch_size // args.num_devices
+
+# # tune learning rate
 # lr_finder = tuner.lr_find(
 #     model, datamodule=dm, update_attr=True, attr_name="learning_rate"
 # )
@@ -68,7 +68,7 @@ dib_dm.batch_size = dm.batch_size // args.num_devices
 # train model
 logger = CSVLogger(os.getcwd())
 Trainer(
-    devices=2,  # only one device due to nested training
+    devices=1,  # only one device due to nested training
     max_epochs=args.epochs,
     logger=logger,
     deterministic=True,
@@ -78,6 +78,7 @@ Trainer(
             dib_epochs=args.dib_epochs,
             dib_dm=dib_dm,
             num_devices=args.num_devices,
+            block_indices=list(range(model.num_blocks)),
         ),
         ComputeNC1(dm.num_classes),
     ],

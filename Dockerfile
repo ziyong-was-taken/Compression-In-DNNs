@@ -4,7 +4,8 @@ COPY environment.yaml /tmp/env.yaml
 COPY *.py .
 COPY data/SZT.pt data/SZT.pt
 
-# ENV CONDA_OVERRIDE_CUDA=12.8 # use CUDA 12.8 for solver
+# use CUDA 12.6 for solver
+ENV CONDA_OVERRIDE_CUDA=12.6
 
-RUN micromamba install -y -n base -f /tmp/env.yaml && \
-    micromamba clean -afy
+RUN micromamba install -y -n base -f /tmp/env.yaml
+RUN micromamba clean -afy

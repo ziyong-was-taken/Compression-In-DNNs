@@ -1,9 +1,9 @@
 import argparse
 import math
 
+import torch
 from lightning import Callback, Trainer
 from lightning.pytorch.callbacks import EarlyStopping
-import torch
 
 from datasets import DIBData
 from networks import DIBNetwork, MetricNetwork
@@ -11,7 +11,9 @@ from networks import DIBNetwork, MetricNetwork
 
 # defaults for command line arguments
 EPOCHS = 1000
+BATCH_SIZE = 64
 LR = 1e-3
+NUM_DEVICES = 1
 DIB_EPOCHS = 200
 
 
@@ -68,10 +70,11 @@ def get_args():
         "--loss", default="CrossEntropy", choices=["CrossEntropy", "MSE"]
     )
     parser.add_argument("--epochs", default=EPOCHS, type=int)
+    parser.add_argument("--batch-size", default=BATCH_SIZE, type=int)
     parser.add_argument("-lr", "--learning-rate", default=LR, type=float)
     parser.add_argument(
         "--num-devices",
-        default=1,
+        default=NUM_DEVICES,
         type=int,
         help="number of devices used to train the DIB network",
     )
@@ -133,6 +136,7 @@ class ComputeNC1(Callback):
 
         # only update class counts on first epoch
         if network.current_epoch == 0:
+            self.class_counts = self.class_counts.to(targets)
             self.class_counts += targets.sum(dim=0)
 
         # update other metrics
@@ -142,7 +146,7 @@ class ComputeNC1(Callback):
                 act_size = activations.size(1)
                 self.layer_metrics[layer] = torch.zeros(
                     (self.num_classes + act_size, act_size)
-                )
+                ).to(activations)
             self.layer_metrics[layer][: self.num_classes] += targets.T @ activations
             self.layer_metrics[layer][self.num_classes :] += activations.T @ activations
 
@@ -175,38 +179,42 @@ class ComputeDIB(Callback):
     """Compute and log the DIB metric at the end of each epoch"""
 
     def __init__(
-        self, num_decoders: int, dib_epochs: int, dib_dm: DIBData, num_devices: int
+        self,
+        num_decoders: int,
+        dib_epochs: int,
+        dib_dm: DIBData,
+        num_devices: int,
+        block_indices: list[int],
     ):
         self.num_decoders = num_decoders
         self.dib_epochs = dib_epochs
         self.dib_dm = dib_dm
         self.num_devices = num_devices
-        self.dib_net: DIBNetwork
+        self.block_indices = block_indices
 
     def on_train_epoch_end(self, _trainer, network: MetricNetwork):
         """Train the DIB network and log the final training loss"""
-        # initialise DIB network
-        if not hasattr(self, "dib_net"):
-            self.dib_net = DIBNetwork(  # TODO: try different block indices
-                *network.get_encoder_decoder(block_idx=3),
-                self.num_decoders,
-                network.optimiser,
-                network.learning_rate,
+        for block_idx in self.block_indices:
+            # initialise DIB network
+            if not hasattr(self, "dib_net"):
+                self.dib_net = DIBNetwork(
+                    *network.get_encoder_decoder(block_idx),
+                    self.num_decoders,
+                    network.optimiser,
+                    network.learning_rate,
+                )
+
+            # train DIB network
+            dib_trainer = Trainer(
+                devices=self.num_devices,
+                max_epochs=self.dib_epochs,
+                logger=False,  # don't write (but do store) training losses
+                default_root_dir="lightning_logs",
+                deterministic=True,
+                callbacks=[EarlyStopping(monitor="train_loss")],
             )
-            if torch.cuda.is_available():
-                self.dib_net.compile()
+            dib_trainer.fit(self.dib_net, datamodule=self.dib_dm)
 
-        # train DIB network
-        dib_trainer = Trainer(
-            devices=self.num_devices,
-            max_epochs=self.dib_epochs,
-            logger=False,  # don't write (but do store) training losses
-            default_root_dir="lightning_logs",
-            deterministic=True,
-            callbacks=[EarlyStopping(monitor="train_loss")],
-        )
-        dib_trainer.fit(self.dib_net, datamodule=self.dib_dm)
-
-        # log final training loss, i.e., decodable information
-        v_info = dib_trainer.logged_metrics["train_loss"]
-        network.log("v_info", v_info)
+            # log final training loss, i.e., decodable information
+            dib = dib_trainer.logged_metrics["train_loss"]
+            network.log(f"dib_{block_idx}", dib)

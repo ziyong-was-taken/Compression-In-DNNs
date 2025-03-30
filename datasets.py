@@ -1,26 +1,26 @@
-from lightning import LightningDataModule
 import torch
+import torchvision.datasets as torchdata
+from lightning import LightningDataModule
 from torch.nn.functional import one_hot
 from torch.utils.data import DataLoader
-import torchvision.datasets as torchdata
 from torchvision.datasets import VisionDataset
 from torchvision.transforms import v2
 
 
 class SZT(VisionDataset):
     classes = [0, 1]  # binary classification
-    training_file = "data/SZT.pt"
+    training_file = "/SZT.pt"
 
     def __init__(
         self,
-        root,
+        root: str,
         train: bool,  # currently useless
         transform=None,
         download: bool = False,  # only for compatibility
     ):
         super().__init__(root, transform=transform)
         self.data: torch.Tensor
-        self.data, self.targets = torch.load(self.training_file)
+        self.data, self.targets = torch.load(root + self.training_file)
         self.targets: torch.Tensor = self.targets.long()
 
     def __getitem__(self, index):
@@ -54,12 +54,12 @@ class RelabeledDataset(VisionDataset):
 
 
 class DataModule(LightningDataModule):
-    def __init__(self, dataset: DATASET_TYPE, data_dir: str):
+    def __init__(self, dataset: DATASET_TYPE, data_dir: str, batch_size: int):
         super().__init__()
 
         self.dataset = dataset
         self.data_dir = data_dir
-        self.batch_size: int = 1  # dummy value
+        self.batch_size = batch_size
         self.transform = v2.Compose(
             [  # TODO: image augmentation and/or normalisation
                 # v2.Resize(224),  # ResNet18 and ConvNext-Tiny expect 224x224 images
@@ -105,7 +105,7 @@ class DataModule(LightningDataModule):
 
 class DIBData(DataModule):
     def __init__(self, datamodule: DataModule, new_labels: torch.Tensor):
-        super().__init__(datamodule.dataset, datamodule.data_dir)
+        super().__init__(datamodule.dataset, datamodule.data_dir, datamodule.batch_size)
         self.new_labels = new_labels
 
     def setup(self, stage):

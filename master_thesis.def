@@ -1,0 +1,12 @@
+Bootstrap: docker
+From: mambaorg/micromamba:latest
+
+%files
+    environment.yaml
+    data/SZT.pt
+
+%post
+    export CONDA_OVERRIDE_CUDA=12.6 # use CUDA 12.6 for solver
+    micromamba install -y -n base -f environment.yaml
+    micromamba clean -afy
+    rm environment.yaml

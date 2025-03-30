@@ -9,6 +9,7 @@ It is mainly implemented using [(PyTorch) Lightning](https://lightning.ai/docs/p
 - [Usage](#usage)
   - [Requirements](#requirements)
   - [Flags](#flags)
+  - [Plotting Results](#plotting-results)
 - [Code Structure](#code-structure)
 - [Algorithms](#algorithms)
   - [Modified Algorithm 1](#modified-algorithm-1)
@@ -46,6 +47,19 @@ docker run -it master_thesis python main.py --flag value
 docker run -it --gpus all master_thesis python main.py --flag value
 ```
 
+There is also an [Apptainer](https://apptainer.org/) definition file `master_thesis.def` which can be used like so:
+
+```bash
+# build the Apptainer container (filename: master_thesis.sif)
+apptainer build master_thesis.sif master_thesis.def
+
+# run the Apptainer container
+./master_thesis.sif python main.py --flag value
+
+# run the Apptainer container (with GPUs)
+apptainer run --nv master_thesis.sif python main.py --flag value
+```
+
 ### Requirements
 
 - `lightning>=2.5.1`: [(PyTorch) Lightning](https://lightning.ai/docs/pytorch/stable/) is the main framework used
@@ -76,13 +90,18 @@ docker run -it --gpus all master_thesis python main.py --flag value
 - for a full list of flags, run `python main.py --help`
 - further information is also available in the `get_args()` function of `utils.py`
 
+### Plotting Results
+
+To plot the results, run the cells in the Jupyter notebook `plots.ipynb` using the conda environment from above as the kernel.
+Alternatively, any kernel with `ipykernel>=6.29.5`, `matplotlib>=3.10.1`, and `pandas>=2.2.3` installed should also work.
+
 ## Code Structure
 
 The code consists of four main Python modules and one Jupyter notebook:
 
 - `utils.py`: contains
   - the command line flag parser
-  - a slightly modified version of Algorithm 1 of "Learning Optimal Representations with the Decodable Information Bottleneck" (see [Modified Algorithm 1](#modified-algorithm-1))
+  - a slightly modified version of Algorithm 1 of ["Learning Optimal Representations with the Decodable Information Bottleneck"](https://proceedings.neurips.cc/paper_files/paper/2020/hash/d8ea5f53c1b1eb087ac2e356253395d8-Abstract.html) (see [Modified Algorithm 1](#modified-algorithm-1))
   - the algorithms for computing the NC1 metric and the DIB (see [Algorithms](#algorithms) for more details)
 - `main.py`: "glue code" which sets up the dataset(s), then creates and trains the model
 - `datasets.py`: logic for loading and transforming the datasets as well as the SZT dataset
@@ -91,7 +110,7 @@ The code consists of four main Python modules and one Jupyter notebook:
 
 When using a dataset for the first time, Lightning will download it into `data/`.
 During training run $i$, Lightning stores model checkpoints for the main network in `lightning_logs/version_`$2i$`/checkpoints/`
-(as well as duplicate checkpoints in `lightning_logs/version_`$2i+1$`/checkpoints/` due to a bug when training nested models) and model checkpoints for the DIB network in `lightning_logs/checkpoints`.
+(as well as duplicate checkpoints in `lightning_logs/version_`$2i+1$`/checkpoints/` due to the nested training) and model checkpoints for the DIB network in `lightning_logs/checkpoints`.
 The metrics for each epoch are stored in `lightning_logs/version_`$2i$`/metrics.csv`.
 
 ## Algorithms

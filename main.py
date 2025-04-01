@@ -49,10 +49,11 @@ match args.model:
         model = getattr(networks, args.model)(
             dm.input_size, dm.num_classes, hyperparams
         )
+model.compile(disable=True)
 
-# create tuner
-dummy_trainer = Trainer(devices=1, max_epochs=-1, barebones=True, deterministic=True)
-tuner = Tuner(dummy_trainer)
+# # create tuner
+# dummy_trainer = Trainer(devices=1, max_epochs=-1, barebones=True, deterministic=True)
+# tuner = Tuner(dummy_trainer)
 
 # # tune batch size
 # tuner.scale_batch_size(model, datamodule=dm, batch_arg_name="batch_size")

@@ -191,18 +191,20 @@ class ComputeDIB(Callback):
         self.dib_dm = dib_dm
         self.num_devices = num_devices
         self.block_indices = block_indices
+        self.dib_nets: list[DIBNetwork] = [None for _ in block_indices]
 
     def on_train_epoch_end(self, _trainer, network: MetricNetwork):
         """Train the DIB network and log the final training loss"""
         for block_idx in self.block_indices:
             # initialise DIB network
-            if not hasattr(self, "dib_net"):
-                self.dib_net = DIBNetwork(
+            if self.dib_nets[block_idx] is None:
+                self.dib_nets[block_idx] = DIBNetwork(
                     *network.get_encoder_decoder(block_idx),
                     self.num_decoders,
                     network.optimiser,
                     network.learning_rate,
                 )
+                self.dib_nets[block_idx].compile()
 
             # train DIB network
             dib_trainer = Trainer(
@@ -213,7 +215,7 @@ class ComputeDIB(Callback):
                 deterministic=True,
                 callbacks=[EarlyStopping(monitor="train_loss")],
             )
-            dib_trainer.fit(self.dib_net, datamodule=self.dib_dm)
+            dib_trainer.fit(self.dib_nets[block_idx], datamodule=self.dib_dm)
 
             # log final training loss, i.e., decodable information
             dib = dib_trainer.logged_metrics["train_loss"]

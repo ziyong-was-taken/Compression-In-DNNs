@@ -49,7 +49,7 @@ match args.model:
         model = getattr(networks, args.model)(
             dm.input_size, dm.num_classes, hyperparams
         )
-model.compile(disable=True)
+model.compile(disable=not args.compile)
 
 # # create tuner
 # dummy_trainer = Trainer(devices=1, max_epochs=-1, barebones=True, deterministic=True)
@@ -80,6 +80,7 @@ Trainer(
             dib_dm=dib_dm,
             num_devices=args.num_devices,
             block_indices=list(range(model.num_blocks)),
+            no_compile=not args.compile,
         ),
         ComputeNC1(dm.num_classes),
     ],

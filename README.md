@@ -67,6 +67,7 @@ apptainer run --nv master_thesis.sif python main.py --flag value
 - `ipykernel>=6.29.5`: necessary to run Jupyter notebook
 - `matplotlib>=3.10.1`: used to create plots
 - `pandas>=2.2.3`: used to read csv data
+- (optional) C and C++ compilers for `torch.compile()`
 
 ### Flags
 

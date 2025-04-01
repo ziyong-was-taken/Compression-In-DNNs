@@ -10,6 +10,7 @@ from networks import DIBNetwork, MetricNetwork
 
 
 # defaults for command line arguments
+COMPILE = True
 EPOCHS = 1000
 BATCH_SIZE = 64
 LR = 1e-3
@@ -17,25 +18,93 @@ NUM_DEVICES = 1
 DIB_EPOCHS = 200
 
 
+class WideHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    """Formatter with wider max_help."""
+
+    def __init__(
+        self, prog, indent_increment=2, max_help_position=55, width=None
+    ) -> None:
+        super().__init__(prog, indent_increment, max_help_position, width)
+
+
+class CustomArgParser(argparse.ArgumentParser):
+    """Custom argument parser that uses a custom help formatter"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, formatter_class=WideHelpFormatter, **kwargs)
+
+    def add_argument(self, *args, default=None, help=None, **kwargs):
+        kwargs["default"] = default
+        kwargs["help"] = (
+            help if (help is not None or default is None) else "(default: %(default)s)"
+        )
+        super().add_argument(*args, **kwargs)
+
+
 def get_args():
     """
     Parse command line arguments:
 
-    -m, --model: model to use
-    -w, --widths: widths of hidden layers of MLP
-    -nl, --nonlinearity: nonlinearity used in hidden layers of MLP
-    -d, --dataset: dataset to use
-    --data-dir: directory containing the dataset
+    -b,   --batch-size: batch size for training
+    -c,   --compile: compile the model
+    -d,   --dataset: dataset to use
+          --data-dir: directory containing the dataset
+          --dib-epochs: number of epochs to train the DIB network
+          --epochs: number of epochs to train the model
+    -lr,  --learning-rate: learning rate for the optimiser
+          --loss: loss function to use
+    -m,   --model: model to use
+    -nl,  --nonlinearity: nonlinearity used in hidden layers of MLP
+          --num-devices: number of devices used to train the DIB network
     -opt, --optimiser: optimiser to use
-    --loss: loss function to use
-    --epochs: number of epochs to train the model
-    --num-devices: number of devices used to train the DIB network
-    --dib-epochs: number of epochs to train the DIB network
+    -w,   --widths: widths of hidden layers of MLP
     """
 
-    parser = argparse.ArgumentParser()
+    parser = CustomArgParser()
+    parser.add_argument("-b", "--batch-size", default=BATCH_SIZE, type=int)
+    parser.add_argument(
+        "-c",
+        "--compile",
+        action=argparse.BooleanOptionalAction,
+        default=COMPILE,
+        help="compile the model(s) using C and C++ compilers",
+    )
+    parser.add_argument(
+        "-d",
+        "--dataset",
+        default="SZT",
+        choices=["MNIST", "CIFAR10", "FashionMNIST", "SZT"],
+    )
+    parser.add_argument("--data-dir", default="data")
+    parser.add_argument("--dib-epochs", default=DIB_EPOCHS, type=int)
+    parser.add_argument("--epochs", default=EPOCHS, type=int)
+    parser.add_argument("-lr", "--learning-rate", default=LR, type=float)
+    parser.add_argument(
+        "--loss", default="CrossEntropy", choices=["CrossEntropy", "MSE"]
+    )
     parser.add_argument(
         "-m", "--model", default="MLP", choices=["MLP", "ConvNeXt", "ResNet"]
+    )
+    parser.add_argument(
+        "-nl",
+        "--nonlinearity",
+        default="ReLU",
+        help=(
+            "nonlinearity used in hidden layers of MLP, "
+            "has no effect on ConvNeXt and ResNet (yet)"
+        ),
+    )
+    parser.add_argument(
+        "--num-devices",
+        default=NUM_DEVICES,
+        type=int,
+        help="number of devices used to train the DIB network",
+    )
+    parser.add_argument(
+        "-opt",
+        "--optimiser",
+        default="AdamW",
+        choices=["AdamW", "Adam", "SGD"],
     )
     parser.add_argument(
         "-w",
@@ -46,39 +115,6 @@ def get_args():
         help="widths of hidden layers of MLP, has no effect on ConvNeXt and ResNet (yet)",
         metavar="WIDTH",
     )
-    parser.add_argument(
-        "-nl",
-        "--nonlinearity",
-        default="ReLU",
-        help=(
-            "nonlinearity used in hidden layers of MLP, "
-            "has no effect on ConvNeXt and ResNet (yet), "
-            "case-sensitive"
-        ),
-    )
-    parser.add_argument(
-        "-d",
-        "--dataset",
-        default="SZT",
-        choices=["MNIST", "CIFAR10", "FashionMNIST", "SZT"],
-    )
-    parser.add_argument("--data-dir", default="data")
-    parser.add_argument(
-        "-opt", "--optimiser", default="AdamW", choices=["AdamW", "Adam", "SGD"]
-    )
-    parser.add_argument(
-        "--loss", default="CrossEntropy", choices=["CrossEntropy", "MSE"]
-    )
-    parser.add_argument("--epochs", default=EPOCHS, type=int)
-    parser.add_argument("--batch-size", default=BATCH_SIZE, type=int)
-    parser.add_argument("-lr", "--learning-rate", default=LR, type=float)
-    parser.add_argument(
-        "--num-devices",
-        default=NUM_DEVICES,
-        type=int,
-        help="number of devices used to train the DIB network",
-    )
-    parser.add_argument("--dib-epochs", default=DIB_EPOCHS, type=int)
     return parser.parse_args()
 
 
@@ -185,6 +221,7 @@ class ComputeDIB(Callback):
         dib_dm: DIBData,
         num_devices: int,
         block_indices: list[int],
+        no_compile: bool,
     ):
         self.num_decoders = num_decoders
         self.dib_epochs = dib_epochs
@@ -192,6 +229,7 @@ class ComputeDIB(Callback):
         self.num_devices = num_devices
         self.block_indices = block_indices
         self.dib_nets: list[DIBNetwork] = [None for _ in block_indices]
+        self.no_compile = no_compile
 
     def on_train_epoch_end(self, _trainer, network: MetricNetwork):
         """Train the DIB network and log the final training loss"""
@@ -204,7 +242,7 @@ class ComputeDIB(Callback):
                     network.optimiser,
                     network.learning_rate,
                 )
-                self.dib_nets[block_idx].compile()
+                self.dib_nets[block_idx].compile(disable=self.no_compile)
 
             # train DIB network
             dib_trainer = Trainer(

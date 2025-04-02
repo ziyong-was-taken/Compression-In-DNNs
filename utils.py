@@ -242,7 +242,7 @@ class ComputeDIB(Callback):
                 logger=False,  # don't write (but do store) training losses
                 default_root_dir="lightning_logs",
                 deterministic=True,
-                callbacks=[EarlyStopping(monitor="train_loss", patience=20)],
+                callbacks=[EarlyStopping(monitor="train_loss", patience=30)],
             )
             dib_trainer.fit(dib_net, datamodule=self.dib_dm)
 

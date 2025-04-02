@@ -84,6 +84,6 @@ Trainer(
             no_compile=not args.compile,
         ),
         ComputeNC1(dm.num_classes),
-        EarlyStopping(monitor="train_loss", patience=20),
+        EarlyStopping(monitor="train_loss", patience=30),
     ],
 ).fit(model, datamodule=dm)

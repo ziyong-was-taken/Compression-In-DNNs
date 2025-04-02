@@ -64,10 +64,12 @@ apptainer run --nv master_thesis.sif python main.py --flag value
 
 - `lightning>=2.5.1`: [(PyTorch) Lightning](https://lightning.ai/docs/pytorch/stable/) is the main framework used
 - `torchvision>=0.21.0`: datasets and models are imported from [torchvision](https://pytorch.org/vision/stable/index.html)
+  - NOTE: The conda solver prioritises the CPU build of `torchvision` (over the CUDA build) due to its higher build number.
+  - To force the CUDA build, use `torchvision>=0.21.0=cuda*` instead
+- `cuda_compiler>=12.8.1` CUDA compiler for [`torch.compile()`](https://pytorch.org/docs/stable/generated/torch.compile.html) (also installs C and C++ compilers)
 - `ipykernel>=6.29.5`: necessary to run Jupyter notebook
 - `matplotlib>=3.10.1`: used to create plots
 - `pandas>=2.2.3`: used to read csv data
-- (optional) C and C++ compilers for `torch.compile()`
 
 ### Flags
 

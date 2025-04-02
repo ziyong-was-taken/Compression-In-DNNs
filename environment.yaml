@@ -5,6 +5,7 @@ dependencies:
   - lightning>=2.5.1
   - torchvision>=0.21.0
   # - torchvision>=0.21.0=cuda* # uncomment for CUDA version
+  - cuda-compiler>=12.8.1
   - ipykernel>=6.29.5
   - matplotlib>=3.10.1
   - pandas>=2.2.3

@@ -4,6 +4,7 @@ from copy import deepcopy
 import torch
 from lightning import LightningModule
 from torch import nn, optim
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision.models import convnext_tiny, resnet18
 
 
@@ -45,8 +46,17 @@ class _Network(LightningModule):
         self.log("train_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
         return loss
 
+    def _opt_parameters(self):
+        """Parameters to optimise"""
+        return self.parameters()
+
     def configure_optimizers(self):
-        return self.optimiser(self.parameters(), lr=self.learning_rate)
+        optimiser = self.optimiser(self._opt_parameters(), lr=self.learning_rate)
+        lr_scheduler = ReduceLROnPlateau(optimiser, factor=0.5)
+        return {
+            "optimizer": optimiser,
+            "lr_scheduler": {"scheduler": lr_scheduler, "monitor": "train_loss"},
+        }
 
 
 class DIBNetwork(_Network):
@@ -97,8 +107,8 @@ class DIBNetwork(_Network):
             outputs = [d(encoded) for d in self.decoders]
         return torch.stack(outputs, dim=-1)
 
-    def configure_optimizers(self):
-        return self.optimiser(self.decoders.parameters(), lr=self.learning_rate)
+    def _opt_parameters(self):
+        return self.decoders.parameters()
 
 
 class MetricNetwork(_Network):

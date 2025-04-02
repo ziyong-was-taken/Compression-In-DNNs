@@ -2,6 +2,7 @@ import os
 
 import torchvision.datasets as torchdata
 from lightning import Trainer, seed_everything
+from lightning.pytorch.callbacks import EarlyStopping
 from lightning.pytorch.loggers import CSVLogger
 from lightning.pytorch.tuner.tuning import Tuner
 from torch import nn, optim
@@ -59,7 +60,7 @@ model.compile(disable=not args.compile)
 # tuner.scale_batch_size(model, datamodule=dm, batch_arg_name="batch_size")
 # dib_dm.batch_size = dm.batch_size // args.num_devices
 
-# # tune learning rate
+# # tune learning rate (broken?)
 # lr_finder = tuner.lr_find(
 #     model, datamodule=dm, update_attr=True, attr_name="learning_rate"
 # )
@@ -83,5 +84,6 @@ Trainer(
             no_compile=not args.compile,
         ),
         ComputeNC1(dm.num_classes),
+        EarlyStopping(monitor="train_loss", patience=20),
     ],
 ).fit(model, datamodule=dm)

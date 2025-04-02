@@ -10,11 +10,11 @@ from networks import DIBNetwork, MetricNetwork
 
 
 # defaults for command line arguments
-BATCH_SIZE = 64
+BATCH_SIZE = 1024
 COMPILE = True
 DIB_EPOCHS = 200
 EPOCHS = 1000
-LR = 1e-3
+LR = 1e-2
 NUM_DEVICES = 1
 
 
@@ -198,9 +198,7 @@ class ComputeNC1(Callback):
                 - torch.outer(global_mean, global_mean)
                 - between_cov
             )
-            nc[layer] = torch.linalg.lstsq(
-                between_cov, within_cov, rcond=1e-15
-            ).solution.trace()
+            nc[layer] = torch.linalg.lstsq(between_cov, within_cov).solution.trace()
         network.log_dict(nc)
 
         # reset NC metrics for next epoch (class counts don't change)
@@ -244,10 +242,13 @@ class ComputeDIB(Callback):
                 logger=False,  # don't write (but do store) training losses
                 default_root_dir="lightning_logs",
                 deterministic=True,
-                callbacks=[EarlyStopping(monitor="train_loss")],
+                callbacks=[EarlyStopping(monitor="train_loss", patience=20)],
             )
             dib_trainer.fit(dib_net, datamodule=self.dib_dm)
 
             # log final training loss, i.e., decodable information
             dib = dib_trainer.logged_metrics["train_loss"]
             network.log(f"dib_{block_idx}", dib, sync_dist=True)
+
+            # free memory
+            del dib_net

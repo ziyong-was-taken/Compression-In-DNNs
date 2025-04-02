@@ -4,9 +4,8 @@ from copy import deepcopy
 import torch
 from lightning import LightningModule
 from torch import nn, optim
-from torch.utils.hooks import RemovableHandle
+from torch.multiprocessing import Pool
 from torchvision.models import convnext_tiny, resnet18
-
 
 NL_TYPE = type[nn.ReLU | nn.Tanh]
 LOSS_TYPE = type[nn.CrossEntropyLoss | nn.MSELoss]
@@ -66,6 +65,7 @@ class DIBNetwork(_Network):
         )
         self.encoder = deepcopy(encoder)  # not copying encoder messes with momentum
         self.decoders = nn.ModuleList(deepcopy(decoder) for _ in range(num_decoders))
+        self.num_decoders = num_decoders
 
         # freeze encoder
         self.encoder.eval()
@@ -92,10 +92,12 @@ class DIBNetwork(_Network):
         encoded = self.encoder(x)
         if torch.cuda.is_available():
             outputs = nn.parallel.parallel_apply(
-                (*self.decoders,), (encoded,) * len(self.decoders)
+                (*self.decoders,), (encoded,) * self.num_decoders
             )
         else:
-            outputs = [d(encoded) for d in self.decoders]
+            num_workers = min(torch.get_num_threads(), self.num_decoders)
+            with Pool(num_workers) as pool:
+                outputs = pool.map(lambda d: d(encoded), self.decoders)
         return torch.stack(outputs, dim=-1)
 
     def configure_optimizers(self):
@@ -109,29 +111,23 @@ class MetricNetwork(_Network):
 
     def __init__(self, hyperparams: HPARAM_TYPE):
         super().__init__(*hyperparams)
-        self.hook_handles: dict[str, RemovableHandle] = {}
-        self.batch_activations: dict[str, torch.Tensor] = {}
         self.num_blocks: int
+        self.batch_activations: dict[str, torch.Tensor] = {}
 
     def _register_hooks(self, new_hooks: dict[str, nn.Module]):
         """Register forward hooks for NC metrics"""
 
-        # remove old hooks (there shouldn't be any)
-        for handle in self.hook_handles.values():
-            handle.remove()
-        self.hook_handles.clear()
-
         # get_hook: layer_name -> (hook: module, args, output -> None)
         def get_hook(name):
             def hook(_module, _args, output):
-                self.batch_activations[name] = output
+                self.batch_activations[name] = output.detach()
 
             return hook
 
         # register new hooks
         new_hooks |= {"nc_output": self.softmax}
         for name, module in new_hooks.items():
-            self.hook_handles[name] = module.register_forward_hook(get_hook(name))
+            module.register_forward_hook(get_hook(name))
 
     def _check_block_idx(self, block_idx):
         assert block_idx < self.num_blocks, (

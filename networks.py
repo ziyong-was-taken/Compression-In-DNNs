@@ -4,7 +4,6 @@ from copy import deepcopy
 import torch
 from lightning import LightningModule
 from torch import nn, optim
-from torch.utils.hooks import RemovableHandle
 from torchvision.models import convnext_tiny, resnet18
 
 
@@ -109,29 +108,23 @@ class MetricNetwork(_Network):
 
     def __init__(self, hyperparams: HPARAM_TYPE):
         super().__init__(*hyperparams)
-        self.hook_handles: dict[str, RemovableHandle] = {}
-        self.batch_activations: dict[str, torch.Tensor] = {}
         self.num_blocks: int
+        self.batch_activations: dict[str, torch.Tensor] = {}
 
     def _register_hooks(self, new_hooks: dict[str, nn.Module]):
         """Register forward hooks for NC metrics"""
 
-        # remove old hooks (there shouldn't be any)
-        for handle in self.hook_handles.values():
-            handle.remove()
-        self.hook_handles.clear()
-
         # get_hook: layer_name -> (hook: module, args, output -> None)
         def get_hook(name):
             def hook(_module, _args, output):
-                self.batch_activations[name] = output
+                self.batch_activations[name] = output.detach()
 
             return hook
 
         # register new hooks
         new_hooks |= {"nc_output": self.softmax}
         for name, module in new_hooks.items():
-            self.hook_handles[name] = module.register_forward_hook(get_hook(name))
+            module.register_forward_hook(get_hook(name))
 
     def _check_block_idx(self, block_idx):
         assert block_idx < self.num_blocks, (

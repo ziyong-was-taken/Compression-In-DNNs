@@ -19,7 +19,7 @@ DIB_EPOCHS = 200
 
 
 class WideHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
-    """Formatter with wider max_help."""
+    """Formatter which shows defaults"""
 
     def __init__(
         self, prog, indent_increment=2, max_help_position=55, width=None
@@ -172,7 +172,7 @@ class ComputeNC1(Callback):
 
         # only update class counts on first epoch
         if network.current_epoch == 0:
-            self.class_counts = self.class_counts.to(targets)
+            self.class_counts = self.class_counts.to(targets, non_blocking=True)
             self.class_counts += targets.sum(dim=0)
 
         # update other metrics
@@ -181,8 +181,8 @@ class ComputeNC1(Callback):
             if layer not in self.layer_metrics:
                 act_size = activations.size(1)
                 self.layer_metrics[layer] = torch.zeros(
-                    (self.num_classes + act_size, act_size)
-                ).to(activations)
+                    (self.num_classes + act_size, act_size), device=network.device
+                )
             self.layer_metrics[layer][: self.num_classes] += targets.T @ activations
             self.layer_metrics[layer][self.num_classes :] += activations.T @ activations
 
@@ -257,4 +257,4 @@ class ComputeDIB(Callback):
 
             # log final training loss, i.e., decodable information
             dib = dib_trainer.logged_metrics["train_loss"]
-            network.log(f"dib_{block_idx}", dib)
+            network.log(f"dib_{block_idx}", dib, sync_dist=True)

@@ -98,6 +98,7 @@ class DataModule(LightningDataModule):
             self.train,
             batch_size=self.batch_size,
             shuffle=True,
+            pin_memory=True,
             num_workers=torch.get_num_threads(),
             persistent_workers=True,  # Keep workers alive between epochs
         )

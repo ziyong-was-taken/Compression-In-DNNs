@@ -80,10 +80,11 @@ class DIBNetwork(_Network):
             optimiser=optimiser,
             learning_rate=learning_rate,
         )
-        self.encoder = deepcopy(encoder)  # not copying encoder messes with momentum
         self.decoders = nn.ModuleList(deepcopy(decoder) for _ in range(num_decoders))
 
-        # freeze encoder
+    def attach_encoder(self, encoder: nn.Module):
+        """Load and freeze parameters of the encoder"""
+        self.encoder = deepcopy(encoder)  # not copying encoder messes with momentum
         self.encoder.eval()
         for param in self.encoder.parameters():
             param.requires_grad = False

@@ -230,32 +230,44 @@ class ComputeDIB(Callback):
         self.num_devices = num_devices
         self.block_indices = block_indices
         self.no_compile = no_compile
+        self.dib_nets: list[DIBNetwork] = [None for _ in block_indices]
 
-    def on_train_epoch_end(self, _trainer, network: MetricNetwork):
+    def on_train_epoch_end(self, trainer: Trainer, network: MetricNetwork):
         """Train the DIB network and log the final training loss"""
-        for block_idx in self.block_indices:
-            dib_net = DIBNetwork(
-                *network.get_encoder_decoder(block_idx),
-                self.num_decoders,
-                network.optimiser,
-                network.learning_rate,
-            )
-            dib_net.compile(disable=self.no_compile)
+        if trainer.current_epoch <= 20 or trainer.current_epoch == 100:
+            for block_idx in self.block_indices:
+                encoder, decoder = network.get_encoder_decoder(block_idx)
 
-            # train DIB network
-            dib_trainer = Trainer(
-                devices=self.num_devices,
-                max_epochs=self.dib_epochs,
-                logger=False,  # don't write (but do store) training losses
-                default_root_dir="lightning_logs",
-                deterministic=True,
-                callbacks=[EarlyStopping(monitor="train_loss", patience=30)],
-            )
-            dib_trainer.fit(dib_net, datamodule=self.dib_dm)
+                # create and compile DIB network
+                if self.dib_nets[block_idx] is None:
+                    self.dib_nets[block_idx] = DIBNetwork(
+                        encoder,
+                        decoder,
+                        self.num_decoders,
+                        network.optimiser,
+                        network.learning_rate,
+                    )
+                    self.dib_nets[block_idx].compile(disable=self.no_compile)
 
-            # log final training loss, i.e., decodable information
-            dib = dib_trainer.logged_metrics["train_loss"]
-            network.log(f"dib_{block_idx}", dib, sync_dist=True)
+                # attach frozen encoder
+                self.dib_nets[block_idx].attach_encoder(encoder)
 
-            # free memory
-            del dib_net
+                # train DIB network
+                dib_trainer = Trainer(
+                    devices=self.num_devices,
+                    max_epochs=self.dib_epochs,
+                    logger=False,  # don't write (but do store) training losses
+                    default_root_dir="lightning_logs",
+                    deterministic=True,
+                    callbacks=[
+                        EarlyStopping(monitor="train_loss", min_delta=1e-5, patience=15)
+                    ],
+                )
+                dib_trainer.fit(self.dib_nets[block_idx], datamodule=self.dib_dm)
+
+                # log final training loss, i.e., decodable information
+                dib = dib_trainer.logged_metrics["train_loss"]
+                network.log(f"dib_{block_idx}", dib, sync_dist=True)
+
+                # free memory
+                del dib_trainer

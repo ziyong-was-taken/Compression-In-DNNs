@@ -200,7 +200,12 @@ class ComputeNC1(Callback):
                 - torch.outer(global_mean, global_mean)
                 - between_cov
             )
-            nc[layer] = torch.linalg.lstsq(between_cov, within_cov).solution.trace()
+            nc[layer] = torch.linalg.lstsq(
+                between_cov.cpu(),  # gelsd only supported on CPU
+                within_cov.cpu(),  # gelsd only supported on CPU
+                driver="gelsd",
+            ).solution.to(network.device).trace()
+
         network.log_dict(nc)
 
         # reset NC metrics for next epoch (class counts don't change)

@@ -25,7 +25,8 @@ class SZT(VisionDataset):
 
     def __getitem__(self, index):
         # treat the data as images
-        img, target = self.data[index].unsqueeze(dim=0), self.targets[index]
+        img = self.data[index].unsqueeze(dim=0)
+        target = self.targets[index]
         if self.transform is not None:
             img = self.transform(img)
         return img, target
@@ -64,9 +65,7 @@ class DataModule(LightningDataModule):
             [  # TODO: image augmentation and/or normalisation
                 # v2.Resize(224),  # ResNet18 and ConvNext-Tiny expect 224x224 images
                 v2.ToImage(),  # convert to TVTensor Image
-                v2.ToDtype(
-                    torch.float32, scale=True
-                ),  # uint8 {0,…,255} to float32 [0,1]
+                v2.ToDtype(torch.float, scale=True),  # uint8 {0,…,255} to float32 [0,1]
             ]
         )
 

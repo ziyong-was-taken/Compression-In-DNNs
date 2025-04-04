@@ -10,7 +10,7 @@ from networks import DIBNetwork, MetricNetwork
 
 
 # defaults for command line arguments
-BATCH_SIZE = 1024
+BATCH_SIZE = 64
 COMPILE = True
 DIB_EPOCHS = 200
 EPOCHS = 1000
@@ -146,12 +146,15 @@ class ComputeNC1(Callback):
     """Compute and log NC metrics at the end of each epoch"""
 
     def __init__(self, num_classes: int):
-        self.num_classes = num_classes
-        self.class_counts = torch.zeros(num_classes)
-        # zˡ: size of flattened activations of layer l
-        # layer_metrics[l]: ((num_classes + zˡ) × zˡ)
-        #     layer_metrics[l][:num_classes]: class sums of activations (num_classes × zˡ)
-        #     layer_metrics[l][num_classes:]: gram matrix (zˡ × zˡ)
+        """
+        Store metrics for each layer as dict `layer_metrics` where
+        `layer_metrics[l]` has shape `((num_classes + zˡ) × zˡ)` and is split into
+        
+        - `layer_metrics[l][:num_classes]`: class sums of activations
+        - `layer_metrics[l][num_classes:]`: gram matrix
+        
+        where `zˡ` is the size of the flattened activations of layer `l`
+        """
         self.layer_metrics: dict[str, torch.Tensor] = {}
 
     @torch.no_grad()
@@ -168,8 +171,7 @@ class ComputeNC1(Callback):
 
         # only update class counts on first epoch
         if network.current_epoch == 0:
-            self.class_counts = self.class_counts.to(targets, non_blocking=True)
-            self.class_counts += targets.sum(dim=0)
+            network.class_counts[:] += targets.sum(dim=0)
 
         # update other metrics
         for layer, activations in network.batch_activations.items():
@@ -177,24 +179,24 @@ class ComputeNC1(Callback):
             if layer not in self.layer_metrics:
                 act_size = activations.size(1)
                 self.layer_metrics[layer] = torch.zeros(
-                    (self.num_classes + act_size, act_size), device=network.device
+                    (network.num_classes + act_size, act_size), device=network.device
                 )
-            self.layer_metrics[layer][: self.num_classes] += targets.T @ activations
-            self.layer_metrics[layer][self.num_classes :] += activations.T @ activations
+            self.layer_metrics[layer][: network.num_classes] += targets.T @ activations
+            self.layer_metrics[layer][network.num_classes :] += activations.T @ activations
 
     @torch.no_grad()
     def on_train_epoch_end(self, _trainer, network: MetricNetwork):
         """Aggregate batched NC metrics and log them"""
         nc: dict[str, torch.Tensor] = {}
-        total_count = self.class_counts.sum()
+        total_count = network.class_counts.sum()
         for layer, joint_metric in self.layer_metrics.items():
-            class_sums = joint_metric[: self.num_classes]
-            class_means = class_sums / self.class_counts.unsqueeze(dim=1)
+            class_sums = joint_metric[: network.num_classes]
+            class_means = class_sums / network.class_counts.unsqueeze(dim=1)
             global_mean = class_sums.sum(dim=0) / total_count
             centred_means = class_means - global_mean
-            between_cov = (centred_means.T @ centred_means) / self.num_classes
+            between_cov = (centred_means.T @ centred_means) / network.num_classes
             within_cov = (
-                joint_metric[self.num_classes :] / total_count
+                joint_metric[network.num_classes :] / total_count
                 - torch.outer(global_mean, global_mean)
                 - between_cov
             )

@@ -12,6 +12,7 @@ NL_TYPE = type[nn.ReLU | nn.Tanh]
 LOSS_TYPE = type[nn.CrossEntropyLoss | nn.MSELoss]
 OPT_TYPE = type[optim.AdamW | optim.Adam | optim.SGD]
 HPARAM_TYPE = tuple[LOSS_TYPE, OPT_TYPE, float]
+METRIC_HPARAM_TYPE = tuple[int, HPARAM_TYPE]
 
 
 class _Network(LightningModule):
@@ -41,10 +42,16 @@ class _Network(LightningModule):
     def training_step(self, batch: list[torch.Tensor]):
         """Compute and log average training loss"""
         inputs, targets = batch
-        # loss = self.criterion()(self(inputs), targets) # see https://discuss.pytorch.org/t/pytorchs-non-deterministic-cross-entropy-loss-and-the-problem-of-reproducibility/172180/9
-        loss = self.criterion(reduction="none")(self(inputs), targets).mean()
+        preds = self(inputs)
+        # loss = self.criterion()(preds, targets) # see https://discuss.pytorch.org/t/pytorchs-non-deterministic-cross-entropy-loss-and-the-problem-of-reproducibility/172180/9
+        loss = self.criterion(reduction="none")(preds, targets).mean()
         self.log("train_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
         return loss
+
+    # def on_train_epoch_end(self):
+    #     print("train loss:   ", self.trainer.logged_metrics["train_loss"].item())
+    #     # print("train acc:    ", self.trainer.logged_metrics["train_acc"])
+    #     print("learning rate:", self.lr_schedulers().get_last_lr()[0])
 
     def _opt_parameters(self):
         """Parameters to optimise"""
@@ -52,7 +59,7 @@ class _Network(LightningModule):
 
     def configure_optimizers(self):
         optimiser = self.optimiser(self._opt_parameters(), lr=self.learning_rate)
-        lr_scheduler = ReduceLROnPlateau(optimiser, factor=0.5)
+        lr_scheduler = ReduceLROnPlateau(optimiser)
         return {
             "optimizer": optimiser,
             "lr_scheduler": {"scheduler": lr_scheduler, "monitor": "train_loss"},
@@ -116,9 +123,11 @@ class MetricNetwork(_Network):
     A blueprint which extends `_Network` with helper functions to compute NC1 and DIB
     """
 
-    def __init__(self, hyperparams: HPARAM_TYPE):
+    def __init__(self, num_classes: int, hyperparams: HPARAM_TYPE):
         super().__init__(*hyperparams)
         self.num_blocks: int
+        self.num_classes = num_classes
+        self.class_counts = nn.Buffer(torch.zeros(num_classes))
         self.batch_activations: dict[str, torch.Tensor] = {}
 
     def _register_hooks(self, new_hooks: dict[str, nn.Module]):
@@ -151,9 +160,12 @@ class MetricNetwork(_Network):
 
 class MLP(MetricNetwork):
     def __init__(
-        self, widths: list[int], nonlinearity: NL_TYPE, hyperparams: HPARAM_TYPE
+        self,
+        widths: list[int],
+        nonlinearity: NL_TYPE,
+        metric_hparams: METRIC_HPARAM_TYPE,
     ):
-        super().__init__(hyperparams)
+        super().__init__(*metric_hparams)
 
         # add layers
         self.flatten = nn.Flatten()
@@ -162,10 +174,10 @@ class MLP(MetricNetwork):
                 nn.Sequential(
                     OrderedDict([("fc", nn.Linear(*in_out)), ("nl", nonlinearity())])
                 )
-                for in_out in zip(widths[:-2], widths[1:-1])
+                for in_out in zip(widths[:-1], widths[1:])
             ]
         )
-        self.fc = nn.Linear(widths[-2], widths[-1])
+        self.fc = nn.Linear(widths[-1], self.num_classes)
 
         # update return nodes (output hooks)
         super()._register_hooks(
@@ -184,10 +196,8 @@ class MLP(MetricNetwork):
 
 
 class ConvNeXt(MetricNetwork):
-    def __init__(
-        self, in_shape: torch.Size, num_classes: int, hyperparams: HPARAM_TYPE
-    ):
-        super().__init__(hyperparams)
+    def __init__(self, in_shape: torch.Size, metric_hparams: METRIC_HPARAM_TYPE):
+        super().__init__(*metric_hparams)
 
         # import torchvision model
         self.convnext = convnext_tiny()
@@ -201,7 +211,7 @@ class ConvNeXt(MetricNetwork):
             stride=old_conv1.stride,
         )
         self.convnext.classifier[2] = nn.Linear(
-            self.convnext.classifier[2].in_features, num_classes
+            self.convnext.classifier[2].in_features, self.num_classes
         )
 
         # update return nodes (output hooks)
@@ -226,10 +236,8 @@ class ConvNeXt(MetricNetwork):
 
 
 class ResNet(MetricNetwork):
-    def __init__(
-        self, in_shape: torch.Size, num_classes: int, hyperparams: HPARAM_TYPE
-    ):
-        super().__init__(hyperparams)
+    def __init__(self, in_shape: torch.Size, metric_hparams: METRIC_HPARAM_TYPE):
+        super().__init__(*metric_hparams)
 
         # import torchvision model
         self.resnet = resnet18()
@@ -244,7 +252,7 @@ class ResNet(MetricNetwork):
             padding=old_conv1.padding,
             bias=old_conv1.bias is not None,
         )
-        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, num_classes)
+        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, self.num_classes)
 
         # update return nodes (output hooks)
         new_hooks = {}

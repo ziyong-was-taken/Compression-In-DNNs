@@ -38,18 +38,14 @@ dib_dm.prepare_data()
 dib_dm.setup("fit")
 
 # create model
-hyperparams = (criterion, optimiser, args.learning_rate)
+metric_hparams = (dm.num_classes, (criterion, optimiser, args.learning_rate))
 match args.model:
     case "MLP":
         model = networks.MLP(
-            [dm.input_size.numel()] + args.widths + [dm.num_classes],
-            nonlinearity,
-            hyperparams,
+            [dm.input_size.numel()] + args.widths, nonlinearity, metric_hparams
         )
     case _:
-        model = getattr(networks, args.model)(
-            dm.input_size, dm.num_classes, hyperparams
-        )
+        model = getattr(networks, args.model)(dm.input_size, metric_hparams)
 model.compile(disable=not args.compile)
 
 # # create tuner
@@ -84,6 +80,6 @@ Trainer(
             no_compile=not args.compile,
         ),
         ComputeNC1(dm.num_classes),
-        EarlyStopping(monitor="train_loss", patience=30),
+        EarlyStopping(monitor="train_loss", patience=15),
     ],
 ).fit(model, datamodule=dm)

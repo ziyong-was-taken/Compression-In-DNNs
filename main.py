@@ -66,7 +66,7 @@ model.compile(disable=not args.compile)
 # train model
 logger = CSVLogger(os.getcwd())
 Trainer(
-    devices=1,  # only one device due to nested training
+    devices=args.num_devices,
     max_epochs=args.epochs,
     logger=logger,
     deterministic=True,

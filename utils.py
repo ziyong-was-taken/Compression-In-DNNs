@@ -149,10 +149,10 @@ class ComputeNC1(Callback):
         """
         Store metrics for each layer as dict `layer_metrics` where
         `layer_metrics[l]` has shape `((num_classes + zˡ) × zˡ)` and is split into
-        
+
         - `layer_metrics[l][:num_classes]`: class sums of activations
         - `layer_metrics[l][num_classes:]`: gram matrix
-        
+
         where `zˡ` is the size of the flattened activations of layer `l`
         """
         self.layer_metrics: dict[str, torch.Tensor] = {}
@@ -182,11 +182,21 @@ class ComputeNC1(Callback):
                     (network.num_classes + act_size, act_size), device=network.device
                 )
             self.layer_metrics[layer][: network.num_classes] += targets.T @ activations
-            self.layer_metrics[layer][network.num_classes :] += activations.T @ activations
+            self.layer_metrics[layer][network.num_classes :] += (
+                activations.T @ activations
+            )
 
     @torch.no_grad()
     def on_train_epoch_end(self, _trainer, network: MetricNetwork):
         """Aggregate batched NC metrics and log them"""
+
+        # synchronise metrics across devices
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.all_reduce(network.class_counts)
+            for layer, joint_metric in self.layer_metrics.items():
+                torch.distributed.all_reduce(joint_metric)
+
+        # compute nc
         nc: dict[str, torch.Tensor] = {}
         total_count = network.class_counts.sum()
         for layer, joint_metric in self.layer_metrics.items():
@@ -200,13 +210,19 @@ class ComputeNC1(Callback):
                 - torch.outer(global_mean, global_mean)
                 - between_cov
             )
-            nc[layer] = torch.linalg.lstsq(
-                between_cov.cpu(),  # gelsd only supported on CPU
-                within_cov.cpu(),  # gelsd only supported on CPU
-                driver="gelsd",
-            ).solution.to(network.device).trace()
+            nc[layer] = (
+                torch.linalg.lstsq(
+                    between_cov.cpu(),  # gelsd only supported on CPU
+                    within_cov.cpu(),  # gelsd only supported on CPU
+                    driver="gelsd",
+                )
+                .solution.trace()
+                .to(network.device)
+            )
 
-        network.log_dict(nc)
+        # only log from process 0
+        if network.global_rank == 0:
+            network.log_dict(nc, rank_zero_only=True)
 
         # reset NC metrics for next epoch (class counts don't change)
         self.layer_metrics.clear()

@@ -157,7 +157,7 @@ class ComputeNC1(Callback):
         """
         self.layer_metrics: dict[str, torch.Tensor] = {}
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def on_train_batch_end(
         self,
         _trainer,
@@ -186,7 +186,7 @@ class ComputeNC1(Callback):
                 activations.T @ activations
             )
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def on_train_epoch_end(self, _trainer, network: MetricNetwork):
         """Aggregate batched NC metrics and log them"""
 

@@ -192,36 +192,32 @@ class ComputeNC1(Callback):
 
         # synchronise metrics across devices
         if torch.distributed.is_available() and torch.distributed.is_initialized():
-            torch.distributed.all_reduce(network.class_counts)
-            for layer, joint_metric in self.layer_metrics.items():
+            if network.current_epoch == 0:
+                torch.distributed.all_reduce(network.class_counts)
+            for joint_metric in self.layer_metrics.values():
                 torch.distributed.all_reduce(joint_metric)
 
-        # compute nc
-        nc: dict[str, torch.Tensor] = {}
-        total_count = network.class_counts.sum()
-        for layer, joint_metric in self.layer_metrics.items():
-            class_sums = joint_metric[: network.num_classes]
-            class_means = class_sums / network.class_counts.unsqueeze(dim=1)
-            global_mean = class_sums.sum(dim=0) / total_count
-            centred_means = class_means - global_mean
-            between_cov = (centred_means.T @ centred_means) / network.num_classes
-            within_cov = (
-                joint_metric[network.num_classes :] / total_count
-                - torch.outer(global_mean, global_mean)
-                - between_cov
-            )
-            nc[layer] = (
-                torch.linalg.lstsq(
+        # only compute and log nc on process 0
+        # TODO: come up with smarter way to load-balance
+        if network.global_rank == 0:
+            nc: dict[str, torch.Tensor] = {}
+            total_count = network.class_counts.sum()
+            for layer, joint_metric in self.layer_metrics.items():
+                class_sums = joint_metric[: network.num_classes]
+                class_means = class_sums / network.class_counts.unsqueeze(dim=1)
+                global_mean = class_sums.sum(dim=0) / total_count
+                centred_means = class_means - global_mean
+                between_cov = (centred_means.T @ centred_means) / network.num_classes
+                within_cov = (
+                    joint_metric[network.num_classes :] / total_count
+                    - torch.outer(global_mean, global_mean)
+                    - between_cov
+                )
+                nc[layer] = torch.linalg.lstsq(
                     between_cov.cpu(),  # gelsd only supported on CPU
                     within_cov.cpu(),  # gelsd only supported on CPU
                     driver="gelsd",
-                )
-                .solution.trace()
-                .to(network.device)
-            )
-
-        # only log from process 0
-        if network.global_rank == 0:
+                ).solution.trace()
             network.log_dict(nc, rank_zero_only=True)
 
         # reset NC metrics for next epoch (class counts don't change)
@@ -250,7 +246,7 @@ class ComputeDIB(Callback):
 
     def on_train_epoch_end(self, trainer: Trainer, network: MetricNetwork):
         """Train the DIB network and log the final training loss"""
-        if trainer.current_epoch <= 20 or trainer.current_epoch == 100:
+        if trainer.current_epoch <= 20 or trainer.current_epoch % 100 == 0:
             for block_idx in self.block_indices:
                 encoder, decoder = network.get_encoder_decoder(block_idx)
 
@@ -275,15 +271,15 @@ class ComputeDIB(Callback):
                     logger=False,  # don't write (but do store) training losses
                     default_root_dir="lightning_logs",
                     deterministic=True,
-                    callbacks=[
-                        EarlyStopping(monitor="train_loss", min_delta=1e-5, patience=15)
-                    ],
+                    callbacks=[EarlyStopping(monitor="train_loss", patience=20)],
                 )
                 dib_trainer.fit(self.dib_nets[block_idx], datamodule=self.dib_dm)
 
-                # log final training loss, i.e., decodable information
-                dib = dib_trainer.logged_metrics["train_loss"]
-                network.log(f"dib_{block_idx}", dib, sync_dist=True)
+                # only log final training loss,
+                # i.e., decodable information, on process 0
+                if network.global_rank == 0:
+                    dib = dib_trainer.logged_metrics["train_loss"]
+                    network.log(f"dib_{block_idx}", dib, rank_zero_only=True)
 
                 # free memory
                 del dib_trainer

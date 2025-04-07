@@ -48,11 +48,6 @@ class _Network(LightningModule):
         self.log("train_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
         return loss
 
-    # def on_train_epoch_end(self):
-    #     print("train loss:   ", self.trainer.logged_metrics["train_loss"].item())
-    #     # print("train acc:    ", self.trainer.logged_metrics["train_acc"])
-    #     print("learning rate:", self.lr_schedulers().get_last_lr()[0])
-
     def _opt_parameters(self):
         """Parameters to optimise"""
         return self.parameters()

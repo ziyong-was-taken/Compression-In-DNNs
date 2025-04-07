@@ -3,3 +3,4 @@ data/*
 lightning_logs/
 *.sif
 test.py
+job.sh

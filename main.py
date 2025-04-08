@@ -48,20 +48,29 @@ match args.model:
         model = getattr(networks, args.model)(dm.input_size, metric_hparams)
 model.compile(disable=not args.compile)
 
+######################### hyperparameter tuning (WIP) #########################
+
 # # create tuner
-# dummy_trainer = Trainer(devices=1, max_epochs=-1, barebones=True, deterministic=True)
+# dummy_trainer = Trainer(
+#     devices=1,
+#     max_epochs=-1,
+#     barebones=True,
+#     deterministic=True,
+# )
 # tuner = Tuner(dummy_trainer)
 
 # # tune batch size
 # tuner.scale_batch_size(model, datamodule=dm, batch_arg_name="batch_size")
-# dib_dm.batch_size = dm.batch_size // args.num_devices
 
-# # tune learning rate (broken?)
+# # tune learning rate
 # lr_finder = tuner.lr_find(
 #     model, datamodule=dm, update_attr=True, attr_name="learning_rate"
 # )
 # lr_finder.plot(suggest=True, show=True)
-# print("Learning rate:", model.learning_rate)
+
+# print("Optimal learning rate:", model.learning_rate)
+
+###############################################################################
 
 # train model
 logger = CSVLogger(os.getcwd())

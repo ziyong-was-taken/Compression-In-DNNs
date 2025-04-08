@@ -72,7 +72,7 @@ class DIBNetwork(_Network):
     ):
         """
         Create a network with multiple copies of `decoder` connected to `encoder`.
-        ```raw
+        ```plaintext
                    decoder →
                   / 
         → encoder -   ⋮     → 

@@ -40,10 +40,10 @@ Build and run the [Docker](https://www.docker.com/) image by using the following
 # build the Docker image (tag: master_thesis)
 docker build -t master_thesis .
 
-# run the Docker image
+# run the Docker container
 docker run -it master_thesis python main.py --flag value
 
-# run the Docker image (with GPUs)
+# run the Docker container (with GPUs)
 docker run -it --gpus all master_thesis python main.py --flag value
 ```
 
@@ -64,7 +64,7 @@ apptainer run --nv master_thesis.sif python main.py --flag value
 
 - `lightning>=2.5.1`: [(PyTorch) Lightning](https://lightning.ai/docs/pytorch/stable/) is the main framework used
 - `torchvision>=0.21.0`: datasets and models are imported from [torchvision](https://pytorch.org/vision/stable/index.html)
-  - NOTE: The conda solver prioritises the CPU build of `torchvision` (over the CUDA build) due to its higher build number.
+  - note: The conda solver prioritises the CPU build of `torchvision` (over the CUDA build) due to its higher build number.
   - To force the CUDA build, use `torchvision>=0.21.0=cuda*` instead
 - `cuda_compiler>=12.8.1` CUDA compiler for [`torch.compile()`](https://pytorch.org/docs/stable/generated/torch.compile.html) (also installs C and C++ compilers)
 - `ipykernel>=6.29.5`: necessary to run Jupyter notebook
@@ -86,7 +86,7 @@ apptainer run --nv master_thesis.sif python main.py --flag value
   - `ConvNeXt`: the [ConvNeXt-T architecture](https://pytorch.org/vision/0.21/models/generated/torchvision.models.convnext_tiny.html) from [A ConvNet for the 2020s](https://openaccess.thecvf.com/content/CVPR2022/html/Liu_A_ConvNet_for_the_2020s_CVPR_2022_paper.html)
   - `ResNet`: the [ResNet-18 architecture](https://pytorch.org/vision/0.21/models/generated/torchvision.models.resnet18.html) from [Deep Residual Learning for Image Recognition](https://openaccess.thecvf.com/content_cvpr_2016/html/He_Deep_Residual_Learning_CVPR_2016_paper.html)
 - supported datasets (case-sensitive):
-  - `SZT`: the dataset used by Schwartz-Ziv & Tishby (2017) in their paper [Opening the Black Box of Deep Neural Networks via Information](https://arxiv.org/abs/1703.00810) (included in the repository)
+  - `SZT`: the dataset (included in the repository) used by Schwartz-Ziv & Tishby (2017) in their paper [Opening the Black Box of Deep Neural Networks via Information](https://arxiv.org/abs/1703.00810)
   - `MNIST`: [MNIST](http://yann.lecun.com/exdb/mnist/)
   - `CIFAR10`: [CIFAR-10](https://www.cs.toronto.edu/~kriz/cifar.html)
   - `FashionMNIST`: [Fashion-MNIST](https://github.com/zalandoresearch/fashion-mnist)
@@ -140,20 +140,19 @@ The new sample labels are then [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] and [0, 1, 2
 
 ### NC1 Computation
 
-- goal: compute $\operatorname{tr}(Σ_W^l Σ_B^{l+})$ for all layers $l ∈ ℒ$
+- goal: each epoch, compute $\operatorname{tr}(Σ_W^l Σ_B^{l+})$ for all layers $l ∈ ℒ$
 - the activations $\{𝐡ˡ_{c,i}\}_{l∈ℒ,\ c ∈ \{1,…,C\},\ i ∈ \{1,…,N\}}$ are accessed by registering forward hooks:
   - MLP: at the end of each nonlinearity
   - ConvNeXt-T, ResNet-18: at the end of each residual block
   - these hooks store the output of each hooked layer after each forward pass
-- issue: activations don't fit in memory all at once
-- solution: only store batch activations $\{𝐡ˡ_{c,i}\}_{l ∈ ℒ,\ c ∈ \{1,…,C\},\ i ∈ \{1,…,S\}}$ where $S$ is the batch size
-- after training a batch and triggering all forward hooks, the `on_train_batch_end` callback is used to update the running
+- since the activations don't fit in memory all at once, only store batch activations $\{𝐡ˡ_{c,i}\}_{l ∈ ℒ,\ c ∈ \{1,…,C\},\ i ∈ \{1,…,S\}}$ where $S$ is the batch size
+- after training a batch and triggering all forward hooks, update the running
   - class counts $\{n_c\}_{c=1}^C$
   - class totals $\{\{∑_{i=1}^{n_c} 𝐡_{c,i}^l\}_{c=1}^C\}_{l ∈ ℒ}$
   - gram matrices $G^l = ∑_{c=1}^C ∑_{i=1}^{n_c} 𝐡_{c,i}^l 𝐡_{c,i}^{l⊤}$ (useful later)
 - computing $Σ_B^l$
-  - $\{\{\boldsymbol μ_c^l\}_{c=1}^C\}_{l ∈ ℒ}$: straightforward using class counts and class totals
-  - $\{\bar{\boldsymbol μ}^l\}_{l ∈ ℒ}$: simply sum class counts and class totals
+  - compute $\boldsymbol μ_c^l = \frac 1{n_c} ∑_{i=1}^{n_c} 𝐡_{c,i}^l$ for $c = 1,…,C$
+  - $\bar{\boldsymbol μ}^l = \frac 1N ∑_{c=1}^C ∑_{i=1}^{n_c} 𝐡_{c,i}^l$ where $N = Σ_{c=1}^C n_c$
   - $Σ_B^l = 1/C ∑_{c=1}^C ({\boldsymbol μ}_c^l - \bar{\boldsymbol μ}^l)({\boldsymbol μ}_c^l - \bar{\boldsymbol μ}^l)^⊤$
 - computing $Σ_W^l$
   - recall: $Σ_W^l + Σ_B^l = Σ_T^l = 1/N ∑_{c=1}^C ∑_{i=1}^{n_c}(𝐡_{c,i}^l - \bar{\boldsymbol μ}^l)(𝐡_{c,i}^l - \bar{\boldsymbol μ}^l)^⊤$
@@ -177,14 +176,22 @@ The new sample labels are then [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] and [0, 1, 2
 ### DIB Computation
 
 1. compute new labels for all samples using [modified Algorithm 1](#modified-algorithm-1)
-2. for each new labelling of the samples, create a copy of the decoder $D$ returned by `model.get_encoder_decoder()`
-3. combine the encoder $E$ and decoders $D_1, D_2, \dots$ into a single model $M$
+2. split the original network $N$ into an encoder $E$ and decoder $D$
+3. for each new labelling of the samples, create a copy of $D$
+4. combine the encoder $E$ and decoders into a single model $M$
    <!---->
    ```plaintext
-          E
-   M =  / | \
-       D₁ D₂ …
+           D
+         /
+   M = E – ⋮
+         \
+           D
    ```
    <!---->
-4. train $M$ using average cross-entropy loss over the decoder heads
-5. return the final training loss of $M$
+5. train $M$ using cross-entropy loss
+6. return the final training loss of $M$
+7. for each epoch of interest,
+   - update the parameters of $E$
+   - reset the parameters of $D$
+   - repeat steps 2-6
+8. repeat steps 2-7 for every (interesting) encoder-decoder split of $N$

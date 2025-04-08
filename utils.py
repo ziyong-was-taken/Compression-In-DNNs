@@ -153,7 +153,7 @@ class ComputeNC1(Callback):
 
         - `size(layer_metrics[l]) == (C + zˡ, zˡ)`
         - `layer_metrics[l][:C]` are the per-class activation sums
-        - `layer_metrics[l][C:]` is the total gram matrix
+        - `layer_metrics[l][C:]` is the gram matrix
         """
         self.layer_metrics: dict[str, torch.Tensor] = {}
 
@@ -246,6 +246,8 @@ class ComputeDIB(Callback):
 
     def on_train_epoch_end(self, trainer: Trainer, network: MetricNetwork):
         """Train the DIB network and log the final training loss"""
+        
+        # only compute DIB for certain epochs to reduce computation
         curr_epoch = trainer.current_epoch
         if (curr_epoch % 2 == 0 and curr_epoch < 40) or curr_epoch % 10 == 0:
             for i, block_idx in enumerate(self.block_indices):

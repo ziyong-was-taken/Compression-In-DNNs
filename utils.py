@@ -189,12 +189,12 @@ class ComputeNC1(Callback):
     def on_train_epoch_end(self, _trainer, network: MetricNetwork):
         """Aggregate batched NC metrics and log them"""
 
-        # synchronise metrics across devices
+        # synchronise metrics to process 0
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             if network.current_epoch == 0:
-                torch.distributed.all_reduce(network.class_counts)
+                torch.distributed.reduce(network.class_counts, dst=0)
             for joint_metric in self.layer_metrics.values():
-                torch.distributed.all_reduce(joint_metric)
+                torch.distributed.reduce(joint_metric, dst=0)
 
         # only compute and log nc on process 0
         # TODO: come up with smarter way to load-balance

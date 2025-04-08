@@ -79,7 +79,7 @@ Trainer(
             block_indices=list(range(model.num_blocks)),
             no_compile=not args.compile,
         ),
-        ComputeNC1(dm.num_classes),
-        EarlyStopping(monitor="train_loss", patience=15),
+        ComputeNC1(),
+        EarlyStopping(monitor="train_loss", patience=20),
     ],
 ).fit(model, datamodule=dm)

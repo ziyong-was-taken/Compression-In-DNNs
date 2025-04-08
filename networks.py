@@ -122,7 +122,6 @@ class MetricNetwork(_Network):
     def __init__(self, num_classes: int, hyperparams: HPARAM_TYPE):
         super().__init__(*hyperparams)
         self.num_blocks: int
-        self.num_classes = num_classes
         self.class_counts = nn.Buffer(torch.zeros(num_classes))
         self.batch_activations: dict[str, torch.Tensor] = {}
 
@@ -173,7 +172,7 @@ class MLP(MetricNetwork):
                 for in_out in zip(widths[:-1], widths[1:])
             ]
         )
-        self.fc = nn.Linear(widths[-1], self.num_classes)
+        self.fc = nn.Linear(widths[-1], metric_hparams[0])
 
         # update return nodes (output hooks)
         super()._register_hooks(
@@ -207,7 +206,7 @@ class ConvNeXt(MetricNetwork):
             stride=old_conv1.stride,
         )
         self.convnext.classifier[2] = nn.Linear(
-            self.convnext.classifier[2].in_features, self.num_classes
+            self.convnext.classifier[2].in_features, metric_hparams[0]
         )
 
         # update return nodes (output hooks)
@@ -248,7 +247,7 @@ class ResNet(MetricNetwork):
             padding=old_conv1.padding,
             bias=old_conv1.bias is not None,
         )
-        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, self.num_classes)
+        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, metric_hparams[0])
 
         # update return nodes (output hooks)
         new_hooks = {}

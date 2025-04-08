@@ -145,15 +145,15 @@ def base_expand(labels: torch.Tensor, num_classes: int):
 class ComputeNC1(Callback):
     """Compute and log NC metrics at the end of each epoch"""
 
-    def __init__(self, num_classes: int):
+    def __init__(self):
         """
-        Store metrics for each layer as dict `layer_metrics` where
-        `layer_metrics[l]` has shape `((num_classes + zˡ) × zˡ)` and is split into
+        Store metrics for each layer as dict `layer_metrics`.
+        Let zˡ be the size of the flattened activations of layer l and
+        C the number of classes, then
 
-        - `layer_metrics[l][:num_classes]`: class sums of activations
-        - `layer_metrics[l][num_classes:]`: gram matrix
-
-        where `zˡ` is the size of the flattened activations of layer `l`
+        - `size(layer_metrics[l]) == (C + zˡ, zˡ)`
+        - `layer_metrics[l][:C]` are the per-class activation sums
+        - `layer_metrics[l][C:]` is the total gram matrix
         """
         self.layer_metrics: dict[str, torch.Tensor] = {}
 
@@ -174,17 +174,16 @@ class ComputeNC1(Callback):
             network.class_counts[:] += targets.sum(dim=0)
 
         # update other metrics
+        num_classes = network.class_counts.size(0)
         for layer, activations in network.batch_activations.items():
             activations = activations.flatten(start_dim=1)
             if layer not in self.layer_metrics:
                 act_size = activations.size(1)
                 self.layer_metrics[layer] = torch.zeros(
-                    (network.num_classes + act_size, act_size), device=network.device
+                    (num_classes + act_size, act_size), device=network.device
                 )
-            self.layer_metrics[layer][: network.num_classes] += targets.T @ activations
-            self.layer_metrics[layer][network.num_classes :] += (
-                activations.T @ activations
-            )
+            self.layer_metrics[layer][:num_classes] += targets.T @ activations
+            self.layer_metrics[layer][num_classes:] += activations.T @ activations
 
     @torch.inference_mode()
     def on_train_epoch_end(self, _trainer, network: MetricNetwork):
@@ -201,15 +200,16 @@ class ComputeNC1(Callback):
         # TODO: come up with smarter way to load-balance
         if network.global_rank == 0:
             nc: dict[str, torch.Tensor] = {}
+            num_classes = network.class_counts.size(0)
             total_count = network.class_counts.sum()
             for layer, joint_metric in self.layer_metrics.items():
-                class_sums = joint_metric[: network.num_classes]
+                class_sums = joint_metric[:num_classes]
                 class_means = class_sums / network.class_counts.unsqueeze(dim=1)
                 global_mean = class_sums.sum(dim=0) / total_count
                 centred_means = class_means - global_mean
-                between_cov = (centred_means.T @ centred_means) / network.num_classes
+                between_cov = (centred_means.T @ centred_means) / num_classes
                 within_cov = (
-                    joint_metric[network.num_classes :] / total_count
+                    joint_metric[num_classes:] / total_count
                     - torch.outer(global_mean, global_mean)
                     - between_cov
                 )

@@ -242,27 +242,29 @@ class ComputeDIB(Callback):
         self.num_devices = num_devices
         self.block_indices = block_indices
         self.no_compile = no_compile
-        self.dib_nets: list[DIBNetwork] = [None for _ in block_indices]
+        self.dib_nets: list[DIBNetwork] = []
 
     def on_train_epoch_end(self, trainer: Trainer, network: MetricNetwork):
         """Train the DIB network and log the final training loss"""
-        if trainer.current_epoch <= 20 or trainer.current_epoch % 100 == 0:
-            for block_idx in self.block_indices:
+        curr_epoch = trainer.current_epoch
+        if (curr_epoch % 2 == 0 and curr_epoch < 40) or curr_epoch % 10 == 0:
+            for i, block_idx in enumerate(self.block_indices):
                 encoder, decoder = network.get_encoder_decoder(block_idx)
 
-                # create and compile DIB network
-                if self.dib_nets[block_idx] is None:
-                    self.dib_nets[block_idx] = DIBNetwork(
-                        encoder,
-                        decoder,
-                        self.num_decoders,
-                        network.optimiser,
-                        network.learning_rate,
+                # create and compile DIB network if nonexistent
+                if len(self.dib_nets) < i + 1:
+                    self.dib_nets.append(
+                        DIBNetwork(
+                            encoder,
+                            decoder,
+                            self.num_decoders,
+                            network.optimiser,
+                            network.learning_rate,
+                        )
                     )
-                    self.dib_nets[block_idx].compile(disable=self.no_compile)
-
-                # attach frozen encoder
-                self.dib_nets[block_idx].attach_encoder(encoder)
+                    self.dib_nets[i].compile(disable=self.no_compile)
+                else:
+                    self.dib_nets[i].update_encoder(encoder)
 
                 # train DIB network
                 dib_trainer = Trainer(
@@ -273,11 +275,11 @@ class ComputeDIB(Callback):
                     deterministic=True,
                     callbacks=[EarlyStopping(monitor="train_loss", patience=20)],
                 )
-                dib_trainer.fit(self.dib_nets[block_idx], datamodule=self.dib_dm)
+                dib_trainer.fit(self.dib_nets[i], datamodule=self.dib_dm)
 
-                # only log final training loss,
-                # i.e., decodable information, on process 0
+                # only log on process 0 since value is the same for all processes
                 if network.global_rank == 0:
+                    # log final training loss, i.e., decodable information 
                     dib = dib_trainer.logged_metrics["train_loss"]
                     network.log(f"dib_{block_idx}", dib, rank_zero_only=True)
 

@@ -116,10 +116,10 @@ def get_args():
 
 def base_expand(labels: torch.Tensor, num_classes: int):
     r"""
-    Generate random relabeling `N` of the data where `N[i,:]` are the new labels of the `i`th sample.
-    Each sample obtains ⌊log_{`num_classes`}(max{|X_y| : y ∈ Y} - 1)⌋ + 1 new labels,
-    where X_y = {x ∈ X : x.label = y}$ and
-    Y = {0,…,`num_classes`-1} is the set of all labels.
+    Generate random relabeling `N` of the data where
+    `N[i,:]` are the new labels of the `i`th sample.
+    Each sample obtains ⌊log_`num_classes`(max{|X_y| : y ∈ Y} - 1)⌋ + 1 new labels,
+    where X_y = {x ∈ X : x.label = y} and Y = {0,…,`num_classes`-1}.
     Based on Algorithm 1 of
     "Learning Optimal Representations with the Decodable Information Bottleneck".
     """

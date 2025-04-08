@@ -70,19 +70,29 @@ class DIBNetwork(_Network):
         optimiser: OPT_TYPE,
         learning_rate: float,
     ):
+        """
+        Create a network with multiple copies of `decoder` connected to `encoder`.
+        ```raw
+                   decoder →
+                  / 
+        → encoder -   ⋮     → 
+                  \\
+                   decoder →
+        ```
+        Before training, the encoder is frozen and the decoders are reset.
+        """
         super().__init__(
             criterion=nn.CrossEntropyLoss,
             optimiser=optimiser,
             learning_rate=learning_rate,
         )
+        # copy encoder to ensure correct device placement of parameters
+        self.encoder = deepcopy(encoder).requires_grad_(False).eval()
         self.decoders = nn.ModuleList(deepcopy(decoder) for _ in range(num_decoders))
 
-    def attach_encoder(self, encoder: nn.Module):
-        """Load and freeze parameters of the encoder"""
-        self.encoder = deepcopy(encoder)  # not copying encoder messes with momentum
-        self.encoder.eval()
-        for param in self.encoder.parameters():
-            param.requires_grad = False
+    def update_encoder(self, encoder: nn.Module):
+        """Update the parameters of the encoder"""
+        self.encoder.load_state_dict(encoder.state_dict())
 
     def on_fit_start(self):
         """

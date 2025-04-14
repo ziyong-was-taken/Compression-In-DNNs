@@ -14,7 +14,7 @@ from networks import LOSS_TYPE, NL_TYPE, OPT_TYPE
 from utils import ComputeDIB, ComputeNC1, base_expand, get_args
 
 args = get_args()
-seed_everything(seed=0, workers=True)
+seed_everything(seed=0)
 
 # convert strings to class constructors
 dataset: DATASET_TYPE
@@ -27,7 +27,12 @@ criterion: LOSS_TYPE = getattr(nn, args.loss + "Loss")
 optimiser: OPT_TYPE = getattr(optim, args.optimiser)
 
 # setup main datamodule
-dm = DataModule(dataset, data_dir=args.data_dir, batch_size=args.batch_size)
+dm = DataModule(
+    dataset,
+    data_dir=args.data_dir,
+    batch_size=args.batch_size // args.num_devices,
+    num_devices=args.num_devices,
+)
 dm.prepare_data()
 dm.setup("fit")
 

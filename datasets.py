@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torchvision.datasets as torchdata
 from lightning import LightningDataModule
@@ -55,12 +57,15 @@ class RelabeledDataset(VisionDataset):
 
 
 class DataModule(LightningDataModule):
-    def __init__(self, dataset: DATASET_TYPE, data_dir: str, batch_size: int):
+    def __init__(
+        self, dataset: DATASET_TYPE, data_dir: str, batch_size: int, num_devices: int
+    ):
         super().__init__()
 
         self.dataset = dataset
         self.data_dir = data_dir
         self.batch_size = batch_size
+        self.num_devices = num_devices
         self.transform = v2.Compose(
             [  # TODO: image augmentation and/or normalisation
                 # v2.Resize(224),  # ResNet18 and ConvNext-Tiny expect 224x224 images
@@ -98,14 +103,19 @@ class DataModule(LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             pin_memory=torch.cuda.is_available(),
-            num_workers=torch.get_num_threads(),
+            num_workers=(os.cpu_count() - 1) // self.num_devices,
             persistent_workers=True,  # Keep workers alive between epochs
         )
 
 
 class DIBData(DataModule):
     def __init__(self, datamodule: DataModule, new_labels: torch.Tensor):
-        super().__init__(datamodule.dataset, datamodule.data_dir, datamodule.batch_size)
+        super().__init__(
+            datamodule.dataset,
+            datamodule.data_dir,
+            datamodule.batch_size,
+            datamodule.num_devices,
+        )
         self.new_labels = new_labels
 
     def setup(self, stage):

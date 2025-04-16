@@ -30,7 +30,7 @@ optimiser: OPT_TYPE = getattr(optim, args.optimiser)
 dm = DataModule(
     dataset,
     data_dir=args.data_dir,
-    batch_size=args.batch_size // args.num_devices,
+    batch_size=args.batch_size,
     num_devices=args.num_devices,
 )
 dm.prepare_data()
@@ -93,7 +93,7 @@ Trainer(
             block_indices=list(range(model.num_blocks)),
             no_compile=not args.compile,
         ),
-        ComputeNC1(),
+        ComputeNC1(num_classes=dm.num_classes, class_counts=dm.class_counts),
         EarlyStopping(monitor="train_loss", patience=20),
     ],
 ).fit(model, datamodule=dm)

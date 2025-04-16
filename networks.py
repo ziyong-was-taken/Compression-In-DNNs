@@ -132,7 +132,6 @@ class MetricNetwork(_Network):
     def __init__(self, num_classes: int, hyperparams: HPARAM_TYPE):
         super().__init__(*hyperparams)
         self.num_blocks: int
-        self.class_counts = nn.Buffer(torch.zeros(num_classes))
         self.batch_activations: dict[str, torch.Tensor] = {}
 
     def _register_hooks(self, new_hooks: dict[str, nn.Module]):

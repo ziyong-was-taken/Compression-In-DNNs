@@ -1,10 +1,9 @@
-import os
-
-import torch
-import torchvision.datasets as torchdata
 from lightning import LightningDataModule
+import lightning.fabric.utilities.suggested_max_num_workers as max_num_workers
+import torch
 from torch.nn.functional import one_hot
 from torch.utils.data import DataLoader
+import torchvision.datasets as torchdata
 from torchvision.datasets import VisionDataset
 from torchvision.transforms import v2
 
@@ -91,6 +90,7 @@ class DataModule(LightningDataModule):
                 self.input_size = base_ds[0][0].size()
                 self.num_classes = len(base_ds.classes)
                 self.labels = torch.as_tensor(base_ds.targets)
+                self.class_counts = self.labels.bincount()
                 self.train = RelabeledDataset(
                     dataset=base_ds,
                     # one-hot labels compatible with both MSE loss and cross-entropy loss
@@ -103,7 +103,7 @@ class DataModule(LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             pin_memory=torch.cuda.is_available(),
-            num_workers=(os.cpu_count() - 1) // self.num_devices,
+            num_workers=max_num_workers(self.num_devices),
             persistent_workers=True,  # Keep workers alive between epochs
         )
 

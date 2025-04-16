@@ -10,7 +10,7 @@ from networks import DIBNetwork, MetricNetwork
 
 
 # defaults for command line arguments
-BATCH_SIZE = 64
+BATCH_SIZE = 128
 COMPILE = True
 DIB_EPOCHS = 200
 EPOCHS = 1000
@@ -145,7 +145,7 @@ def base_expand(labels: torch.Tensor, num_classes: int):
 class ComputeNC1(Callback):
     """Compute and log NC metrics at the end of each epoch"""
 
-    def __init__(self):
+    def __init__(self, num_classes: int, class_counts: torch.Tensor):
         """
         Store metrics for each layer as dict `layer_metrics`.
         Let zˡ be the size of the flattened activations of layer l and
@@ -155,6 +155,8 @@ class ComputeNC1(Callback):
         - `layer_metrics[l][:C]` are the per-class activation sums
         - `layer_metrics[l][C:]` is the gram matrix
         """
+        self.num_classes = num_classes
+        self.class_counts = class_counts
         self.layer_metrics: dict[str, torch.Tensor] = {}
 
     @torch.inference_mode()
@@ -168,22 +170,15 @@ class ComputeNC1(Callback):
     ):
         """Update NC metrics after each batch"""
         _, targets = batch
-
-        # only update class counts on first epoch
-        if network.current_epoch == 0:
-            network.class_counts[:] += targets.sum(dim=0)
-
-        # update other metrics
-        num_classes = network.class_counts.size(0)
         for layer, activations in network.batch_activations.items():
             activations = activations.flatten(start_dim=1)
             if layer not in self.layer_metrics:
                 act_size = activations.size(1)
                 self.layer_metrics[layer] = torch.zeros(
-                    (num_classes + act_size, act_size), device=network.device
+                    (self.num_classes + act_size, act_size), device=network.device
                 )
-            self.layer_metrics[layer][:num_classes] += targets.T @ activations
-            self.layer_metrics[layer][num_classes:] += activations.T @ activations
+            self.layer_metrics[layer][: self.num_classes] += targets.T @ activations
+            self.layer_metrics[layer][self.num_classes :] += activations.T @ activations
 
     @torch.inference_mode()
     def on_train_epoch_end(self, _trainer, network: MetricNetwork):
@@ -191,25 +186,23 @@ class ComputeNC1(Callback):
 
         # synchronise metrics to process 0
         if torch.distributed.is_available() and torch.distributed.is_initialized():
-            if network.current_epoch == 0:
-                torch.distributed.reduce(network.class_counts, dst=0)
             for joint_metric in self.layer_metrics.values():
                 torch.distributed.reduce(joint_metric, dst=0)
 
         # only compute and log nc on process 0
         # TODO: come up with smarter way to load-balance
         if network.global_rank == 0:
+            self.class_counts = self.class_counts.to(network.device)
             nc: dict[str, torch.Tensor] = {}
-            num_classes = network.class_counts.size(0)
-            total_count = network.class_counts.sum()
+            total_count = self.class_counts.sum()
             for layer, joint_metric in self.layer_metrics.items():
-                class_sums = joint_metric[:num_classes]
-                class_means = class_sums / network.class_counts.unsqueeze(dim=1)
+                class_sums = joint_metric[: self.num_classes]
+                class_means = class_sums / self.class_counts.unsqueeze(dim=1)
                 global_mean = class_sums.sum(dim=0) / total_count
                 centred_means = class_means - global_mean
-                between_cov = (centred_means.T @ centred_means) / num_classes
+                between_cov = (centred_means.T @ centred_means) / self.num_classes
                 within_cov = (
-                    joint_metric[num_classes:] / total_count
+                    joint_metric[self.num_classes :] / total_count
                     - torch.outer(global_mean, global_mean)
                     - between_cov
                 )

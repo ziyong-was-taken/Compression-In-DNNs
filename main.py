@@ -83,6 +83,7 @@ Trainer(
     devices=args.num_devices,
     max_epochs=args.epochs,
     logger=logger,
+    benchmark=True,
     deterministic=True,
     callbacks=[
         ComputeDIB(

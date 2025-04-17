@@ -187,7 +187,7 @@ class MLP(MetricNetwork):
         super()._register_hooks(
             {f"nc_layer_{i}": block.nl for i, block in enumerate(self.blocks)}
         )
-        self.num_blocks = len(self.blocks)
+        self.num_blocks = len(self.blocks) + 1
 
     def _forward(self, x):
         return self.fc(self.blocks(self.flatten(x)))
@@ -223,7 +223,7 @@ class ConvNeXt(MetricNetwork):
         for i, j in zip(range(4), (2, 2, 8, 2)):
             new_hooks[f"nc_layer_{i}"] = self.convnext.features[2 * i + 1][j].add
         super()._register_hooks(new_hooks)
-        self.num_blocks = len(self.convnext.features) // 2
+        self.num_blocks = len(self.convnext.features) // 2 + 1
 
     def _forward(self, x):
         return self.convnext(x)
@@ -264,7 +264,7 @@ class ResNet(MetricNetwork):
             layer = getattr(self.resnet, f"layer{i + 1}")
             new_hooks[f"nc_layer_{i}"] = layer[1].relu
         super()._register_hooks(new_hooks)
-        self.num_blocks = 4
+        self.num_blocks = 5
 
     def _forward(self, x):
         return self.resnet(x)

@@ -255,8 +255,11 @@ class ComputeDIB(Callback):
 
         # only compute DIB for certain epochs to reduce computation
         curr_epoch = trainer.current_epoch
-        if curr_epoch < 20 or curr_epoch % 10 == 0:
-            for i, block_idx in enumerate(self.block_indices):
+        if curr_epoch < 20 or curr_epoch % 20 == 0:
+            not_first = curr_epoch > 0
+            for i, block_idx in enumerate(
+                self.block_indices[int(not_first) :], start=int(not_first)
+            ):
                 # update encoder
                 encoder, _ = network.get_encoder_decoder(block_idx)
                 self.dib_nets[i].update_encoder(encoder)

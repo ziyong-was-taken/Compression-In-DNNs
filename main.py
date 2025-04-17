@@ -30,7 +30,7 @@ optimiser: OPT_TYPE = getattr(optim, args.optimiser)
 dm = DataModule(
     dataset,
     data_dir=args.data_dir,
-    batch_size=args.batch_size,
+    batch_size=args.batch_size // args.num_devices,
     num_devices=args.num_devices,
 )
 dm.prepare_data()
@@ -82,6 +82,7 @@ logger = CSVLogger(os.getcwd())
 Trainer(
     devices=args.num_devices,
     max_epochs=args.epochs,
+    log_every_n_steps=32,
     logger=logger,
     benchmark=True,
     deterministic=True,

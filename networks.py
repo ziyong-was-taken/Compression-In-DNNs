@@ -3,6 +3,7 @@ from copy import deepcopy
 
 import torch
 from lightning import LightningModule
+from torchmetrics import Accuracy
 from torch import nn, optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision.models import convnext_tiny, resnet18
@@ -29,6 +30,8 @@ class _Network(LightningModule):
         self.optimiser = optimiser
         self.learning_rate = learning_rate
 
+        # self.accuracy = Accuracy("binary")
+
     def forward(self, x):
         raise NotImplementedError
 
@@ -39,6 +42,10 @@ class _Network(LightningModule):
         # loss = self.criterion()(preds, targets) # see https://discuss.pytorch.org/t/pytorchs-non-deterministic-cross-entropy-loss-and-the-problem-of-reproducibility/172180/9
         loss = self.criterion(reduction="none")(preds, targets).mean()
         self.log("train_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
+
+        # self.accuracy(preds, targets)
+        # self.log("train_acc", self.accuracy, on_step=False, on_epoch=True, sync_dist=True)
+
         return loss
 
     def _opt_parameters(self):

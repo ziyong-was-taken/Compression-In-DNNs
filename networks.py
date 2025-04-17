@@ -18,7 +18,7 @@ METRIC_HPARAM_TYPE = tuple[int, HPARAM_TYPE]
 class _Network(LightningModule):
     """
     The blueprint for a basic network with a softmax output layer.
-    Simply implement `_forward` and the blueprint handles the rest.
+    Simply implement `forward` and the blueprint handles the rest.
     """
 
     def __init__(self, criterion: LOSS_TYPE, optimiser: OPT_TYPE, learning_rate: float):
@@ -29,15 +29,8 @@ class _Network(LightningModule):
         self.optimiser = optimiser
         self.learning_rate = learning_rate
 
-        # final softmax layer
-        self.softmax = nn.Softmax(dim=-1)
-
-    def _forward(self, x):
-        """Internal forward implementation (sans softmax)"""
-        raise NotImplementedError
-
     def forward(self, x):
-        return self.softmax(self._forward(x))
+        raise NotImplementedError
 
     def training_step(self, batch: list[torch.Tensor]):
         """Compute and log average training loss"""
@@ -110,7 +103,7 @@ class DIBNetwork(_Network):
 
         self.decoders.apply(reset_weights)
 
-    def _forward(self, x):
+    def forward(self, x):
         encoded = self.encoder(x)
         if torch.cuda.is_available():
             outputs = nn.parallel.parallel_apply(
@@ -145,7 +138,6 @@ class MetricNetwork(_Network):
             return hook
 
         # register new hooks
-        new_hooks |= {"nc_output": self.softmax}
         for name, module in new_hooks.items():
             module.register_forward_hook(get_hook(name))
 
@@ -186,10 +178,11 @@ class MLP(MetricNetwork):
         # update return nodes (output hooks)
         super()._register_hooks(
             {f"nc_layer_{i}": block.nl for i, block in enumerate(self.blocks)}
+            | {"nc_output": self.fc}
         )
         self.num_blocks = len(self.blocks) + 1
 
-    def _forward(self, x):
+    def forward(self, x):
         return self.fc(self.blocks(self.flatten(x)))
 
     def get_encoder_decoder(self, block_idx):
@@ -222,10 +215,11 @@ class ConvNeXt(MetricNetwork):
         new_hooks = {}
         for i, j in zip(range(4), (2, 2, 8, 2)):
             new_hooks[f"nc_layer_{i}"] = self.convnext.features[2 * i + 1][j].add
+        new_hooks["nc_output"] = self.convnext.classifier[2]
         super()._register_hooks(new_hooks)
         self.num_blocks = len(self.convnext.features) // 2 + 1
 
-    def _forward(self, x):
+    def forward(self, x):
         return self.convnext(x)
 
     def get_encoder_decoder(self, block_idx):
@@ -263,10 +257,11 @@ class ResNet(MetricNetwork):
         for i in range(4):
             layer = getattr(self.resnet, f"layer{i + 1}")
             new_hooks[f"nc_layer_{i}"] = layer[1].relu
+        new_hooks["nc_output"] = self.resnet.fc
         super()._register_hooks(new_hooks)
         self.num_blocks = 5
 
-    def _forward(self, x):
+    def forward(self, x):
         return self.resnet(x)
 
     def get_encoder_decoder(self, block_idx):

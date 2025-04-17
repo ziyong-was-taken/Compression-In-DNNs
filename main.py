@@ -1,11 +1,11 @@
 import os
 
-import torchvision.datasets as torchdata
 from lightning import Trainer, seed_everything
 from lightning.pytorch.callbacks import EarlyStopping
 from lightning.pytorch.loggers import CSVLogger
 from lightning.pytorch.tuner.tuning import Tuner
 from torch import nn, optim
+from torchvision import datasets as torchdata
 
 import datasets
 import networks

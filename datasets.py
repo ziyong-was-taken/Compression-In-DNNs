@@ -1,9 +1,9 @@
-from lightning import LightningDataModule
-import lightning.fabric.utilities.suggested_max_num_workers as max_num_workers
 import torch
+from lightning import LightningDataModule
+from lightning.fabric.utilities import suggested_max_num_workers as max_num_workers
 from torch.nn.functional import one_hot
-from torch.utils.data import DataLoader
-import torchvision.datasets as torchdata
+from torch.utils.data import DataLoader, TensorDataset
+from torchvision import datasets as torchdata
 from torchvision.datasets import VisionDataset
 from torchvision.transforms import v2
 
@@ -38,21 +38,6 @@ class SZT(VisionDataset):
 
 # has to be after definition of SZT
 DATASET_TYPE = type[torchdata.MNIST | torchdata.FashionMNIST | torchdata.CIFAR10 | SZT]
-
-
-class RelabeledDataset(VisionDataset):
-    """Dataset wrapper that relabels the data with `new_labels`"""
-
-    def __init__(self, dataset: VisionDataset, new_labels: torch.Tensor):
-        self.dataset = dataset
-        self.new_labels = new_labels
-
-    def __getitem__(self, index):
-        data, _ = self.dataset[index]
-        return data, self.new_labels[index]
-
-    def __len__(self):
-        return len(self.dataset)
 
 
 class DataModule(LightningDataModule):
@@ -91,10 +76,8 @@ class DataModule(LightningDataModule):
                 self.num_classes = len(base_ds.classes)
                 self.labels = torch.as_tensor(base_ds.targets)
                 self.class_counts = self.labels.bincount()
-                self.train = RelabeledDataset(
-                    dataset=base_ds,
-                    # one-hot labels compatible with both MSE loss and cross-entropy loss
-                    new_labels=one_hot(self.labels, self.num_classes).float(),
+                self.train = TensorDataset(
+                    base_ds.data.float(), one_hot(self.labels, self.num_classes).float()
                 )
 
     def train_dataloader(self):
@@ -125,6 +108,4 @@ class DIBData(DataModule):
                 base_ds = self.dataset(
                     self.data_dir, train=True, transform=self.transform
                 )
-                self.train = RelabeledDataset(
-                    dataset=base_ds, new_labels=self.new_labels
-                )
+                self.train = TensorDataset(base_ds.data.float(), self.new_labels)

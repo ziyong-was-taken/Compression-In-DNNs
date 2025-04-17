@@ -12,9 +12,9 @@ from networks import DIBNetwork, MetricNetwork
 # defaults for command line arguments
 BATCH_SIZE = 128
 COMPILE = True
-DIB_EPOCHS = 200
-EPOCHS = 1000
-LR = 1e-2
+DIB_EPOCHS = -1
+EPOCHS = 200
+LR = 0.1
 NUM_DEVICES = 1
 
 

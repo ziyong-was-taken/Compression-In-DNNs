@@ -2,7 +2,7 @@ import torch
 from lightning import LightningDataModule
 from lightning.fabric.utilities import suggested_max_num_workers as max_num_workers
 from torch.nn.functional import one_hot
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, random_split
 from torchvision import datasets as torchdata
 from torchvision.datasets import VisionDataset
 from torchvision.transforms import v2
@@ -37,7 +37,7 @@ class SZT(VisionDataset):
 
 
 # has to be after definition of SZT
-DATASET_TYPE = type[torchdata.MNIST | torchdata.FashionMNIST | torchdata.CIFAR10 | SZT]
+DATASET_TYPE = type[torchdata.CIFAR10 | torchdata.FashionMNIST | torchdata.MNIST | SZT]
 
 
 class DataModule(LightningDataModule):
@@ -65,25 +65,39 @@ class DataModule(LightningDataModule):
     def setup(self, stage):
         """
         Setup the train and test datasets.
-        When training, compute the input and output size as well as the new labels.
+        When training, compute the
+        - input size,
+        - output size,
+        - class distribution/counts, and
+        - DIB labels.
         """
         match stage:
             case "fit":
                 base_ds = self.dataset(
                     self.data_dir, train=True, transform=self.transform
                 )
+                # TODO: compute metrics on validation set
+                # train_split, val_split = random_split(base_ds, [0.8, 0.2])
                 self.input_size = base_ds[0][0].size()
                 self.num_classes = len(base_ds.classes)
                 self.labels = torch.as_tensor(base_ds.targets)
                 self.class_counts = self.labels.bincount()
+                assert self.num_classes == (count := self.class_counts.size(0)), (
+                    f"Dataset supposedly has {self.num_classes} classes, "
+                    f"but only {count} different labels found"
+                )
+
+                # TODO: pre-move data to device
                 self.train = TensorDataset(
-                    base_ds.data.float(), one_hot(self.labels, self.num_classes).float()
+                    base_ds.data.unsqueeze(dim=1).float(),
+                    # one hot labels compatible with both cross entropy loss and MSE loss
+                    one_hot(self.labels, self.num_classes).float(),
                 )
 
     def train_dataloader(self):
         return DataLoader(
             self.train,
-            batch_size=self.batch_size,
+            batch_size=self.batch_size // self.num_devices,
             shuffle=True,
             pin_memory=torch.cuda.is_available(),
             num_workers=max_num_workers(self.num_devices),
@@ -92,14 +106,14 @@ class DataModule(LightningDataModule):
 
 
 class DIBData(DataModule):
-    def __init__(self, datamodule: DataModule, new_labels: torch.Tensor):
+    def __init__(self, datamodule: DataModule, dib_labels: torch.Tensor):
         super().__init__(
             datamodule.dataset,
             datamodule.data_dir,
             datamodule.batch_size,
             datamodule.num_devices,
         )
-        self.new_labels = new_labels
+        self.dib_labels = dib_labels
 
     def setup(self, stage):
         """Create the train dataset with new labels."""
@@ -108,4 +122,4 @@ class DIBData(DataModule):
                 base_ds = self.dataset(
                     self.data_dir, train=True, transform=self.transform
                 )
-                self.train = TensorDataset(base_ds.data.float(), self.new_labels)
+                self.train = TensorDataset(base_ds.data.float(), self.dib_labels)

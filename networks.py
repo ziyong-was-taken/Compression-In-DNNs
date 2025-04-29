@@ -5,15 +5,16 @@ import torch
 from lightning import LightningModule
 from torchmetrics import Accuracy
 from torch import nn, optim
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import OneCycleLR
 from torchvision.models import convnext_tiny, resnet18
 
 
 NL_TYPE = type[nn.ReLU | nn.Tanh]
 LOSS_TYPE = type[nn.CrossEntropyLoss | nn.MSELoss]
 OPT_TYPE = type[optim.AdamW | optim.Adam | optim.SGD]
-HPARAM_TYPE = tuple[LOSS_TYPE, OPT_TYPE, float]
-METRIC_HPARAM_TYPE = tuple[int, HPARAM_TYPE]
+HPARAM_TYPE = tuple[
+    LOSS_TYPE, OPT_TYPE, float, int
+]  # loss function, optimiser, learning rate, total steps
 
 
 class _Network(LightningModule):
@@ -22,15 +23,23 @@ class _Network(LightningModule):
     Simply implement `forward` and the blueprint handles the rest.
     """
 
-    def __init__(self, criterion: LOSS_TYPE, optimiser: OPT_TYPE, learning_rate: float):
+    def __init__(
+        self,
+        criterion: LOSS_TYPE,
+        optimiser: OPT_TYPE,
+        learning_rate: float,
+        total_steps: int,
+    ):
         super().__init__()
 
         # store architecture parameters
         self.criterion = criterion
         self.optimiser = optimiser
         self.learning_rate = learning_rate
+        self.total_steps = total_steps
 
-        # self.accuracy = Accuracy("binary")
+        # compute accuracy
+        self.accuracy = Accuracy("multiclass", num_classes=10)
 
     def forward(self, x):
         raise NotImplementedError
@@ -38,13 +47,14 @@ class _Network(LightningModule):
     def training_step(self, batch: list[torch.Tensor]):
         """Compute and log average training loss"""
         inputs, targets = batch
-        preds = self(inputs)
+        preds: torch.Tensor = self(inputs)
         # loss = self.criterion()(preds, targets) # see https://discuss.pytorch.org/t/pytorchs-non-deterministic-cross-entropy-loss-and-the-problem-of-reproducibility/172180/9
         loss = self.criterion(reduction="none")(preds, targets).mean()
-        self.log("train_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("train_loss", loss, sync_dist=True)
 
-        # self.accuracy(preds, targets)
-        # self.log("train_acc", self.accuracy, on_step=False, on_epoch=True, sync_dist=True)
+        with torch.inference_mode():
+            self.accuracy(preds.argmax(dim=-1), targets.argmax(dim=-1))
+            self.log("train_acc", self.accuracy, sync_dist=True)
 
         return loss
 
@@ -53,11 +63,22 @@ class _Network(LightningModule):
         return self.parameters()
 
     def configure_optimizers(self):
-        optimiser = self.optimiser(self._opt_parameters(), lr=self.learning_rate)
-        lr_scheduler = ReduceLROnPlateau(optimiser)
+        optimiser = self.optimiser(
+            self._opt_parameters(), lr=self.learning_rate, fused=True
+        )
+        lr_scheduler = OneCycleLR(
+            optimiser,
+            max_lr=self.learning_rate,
+            total_steps=self.total_steps,
+            cycle_momentum=False,
+        )
         return {
             "optimizer": optimiser,
-            "lr_scheduler": {"scheduler": lr_scheduler, "monitor": "train_loss"},
+            "lr_scheduler": {
+                "scheduler": lr_scheduler,
+                "interval": "step",
+                # "monitor": "train_loss",
+            },
         }
 
 
@@ -69,6 +90,7 @@ class DIBNetwork(_Network):
         num_decoders: int,
         optimiser: OPT_TYPE,
         learning_rate: float,
+        total_steps: int,
     ):
         """
         Create a network with multiple copies of `decoder` connected to `encoder`.
@@ -85,6 +107,7 @@ class DIBNetwork(_Network):
             criterion=nn.CrossEntropyLoss,
             optimiser=optimiser,
             learning_rate=learning_rate,
+            total_steps=total_steps,
         )
         # copy encoder to ensure correct device placement of parameters
         self.encoder = deepcopy(encoder).requires_grad_(False).eval()
@@ -129,7 +152,7 @@ class MetricNetwork(_Network):
     A blueprint which extends `_Network` with helper functions to compute NC1 and DIB
     """
 
-    def __init__(self, num_classes: int, hyperparams: HPARAM_TYPE):
+    def __init__(self, hyperparams: HPARAM_TYPE):
         super().__init__(*hyperparams)
         self.num_blocks: int
         self.batch_activations: dict[str, torch.Tensor] = {}
@@ -148,12 +171,12 @@ class MetricNetwork(_Network):
         for name, module in new_hooks.items():
             module.register_forward_hook(get_hook(name))
 
-    def _check_block_idx(self, block_idx):
+    def _check_block_idx(self, block_idx: int):
         assert block_idx < self.num_blocks, (
             f"{type(self).__name__} only has {self.num_blocks} blocks"
         )
 
-    def get_encoder_decoder(self, block_idx) -> tuple[nn.Module, nn.Module]:
+    def get_encoder_decoder(self, block_idx: int) -> tuple[nn.Module, nn.Module]:
         """
         Get a copy of the encoder up to start of block `block_idx`
         and the decoder (sans softmax) containing the rest of the network.
@@ -166,16 +189,16 @@ class MLP(MetricNetwork):
         self,
         widths: list[int],
         nonlinearity: NL_TYPE,
-        metric_hparams: METRIC_HPARAM_TYPE,
+        hyperparams: HPARAM_TYPE,
     ):
-        super().__init__(*metric_hparams)
+        super().__init__(hyperparams)
 
         # add layers
         self.flatten = nn.Flatten()
         self.blocks = nn.Sequential(
             *[
                 nn.Sequential(
-                    OrderedDict([("fc", nn.Linear(*in_out)), ("nl", nonlinearity())])
+                    OrderedDict({"fc": nn.Linear(*in_out), "nl": nonlinearity()})
                 )
                 for in_out in zip(widths[:-1], widths[1:])
             ]
@@ -199,9 +222,70 @@ class MLP(MetricNetwork):
         return encoder, decoder
 
 
+class CNN(MetricNetwork):
+    def __init__(
+        self,
+        in_shape: torch.Size,
+        nonlinearity: NL_TYPE,
+        hyperparams: HPARAM_TYPE,
+    ):
+        super().__init__(hyperparams)
+
+        # define convolutional blocks
+        channels = (in_shape[0], 24, 32)
+        kernels = (5, 3)
+        assert len(channels) == len(kernels) + 1, (
+            f"Number of channels ({len(channels)}) ≠ number of kernels ({len(kernels)}) + 1"
+        )
+        self.blocks = nn.Sequential(
+            *[
+                nn.Sequential(
+                    OrderedDict(
+                        {
+                            "conv": nn.Conv2d(*conv_params),
+                            "pool": nn.MaxPool2d(2),
+                            "nl": nonlinearity(),
+                        }
+                    )
+                )
+                for conv_params in zip(channels[:-1], channels[1:], kernels)
+            ]
+        )
+
+        # define fully connected layers
+        self.classifier = nn.Sequential(
+            OrderedDict(
+                {
+                    "flatten": nn.Flatten(),
+                    "fc1": nn.Linear(800, 256),
+                    "nl": nonlinearity(),
+                    "fc2": nn.Linear(256, metric_hparams[0]),
+                }
+            )
+        )
+
+        # update return nodes (output hooks)
+        super()._register_hooks(
+            {f"nc_layer_{i}": block.nl for i, block in enumerate(self.blocks)}
+            | {"nc_output": self.classifier.fc2}
+        )
+        self.num_blocks = len(self.blocks) + 1
+
+    def forward(self, x):
+        return self.classifier(self.blocks(x))
+
+    def get_encoder_decoder(self, block_idx):
+        super()._check_block_idx(block_idx)
+        encoder = nn.Sequential(*self.blocks[:block_idx])
+        decoder = nn.Sequential(*self.blocks[block_idx:], self.classifier)
+        return encoder, decoder
+
+
 class ConvNeXt(MetricNetwork):
-    def __init__(self, in_shape: torch.Size, metric_hparams: METRIC_HPARAM_TYPE):
-        super().__init__(*metric_hparams)
+    def __init__(
+        self, in_shape: torch.Size, num_classes: int, hyperparams: HPARAM_TYPE
+    ):
+        super().__init__(hyperparams)
 
         # import torchvision model
         self.convnext = convnext_tiny()
@@ -215,7 +299,7 @@ class ConvNeXt(MetricNetwork):
             stride=old_conv1.stride,
         )
         self.convnext.classifier[2] = nn.Linear(
-            self.convnext.classifier[2].in_features, metric_hparams[0]
+            self.convnext.classifier[2].in_features, num_classes
         )
 
         # update return nodes (output hooks)
@@ -241,8 +325,10 @@ class ConvNeXt(MetricNetwork):
 
 
 class ResNet(MetricNetwork):
-    def __init__(self, in_shape: torch.Size, metric_hparams: METRIC_HPARAM_TYPE):
-        super().__init__(*metric_hparams)
+    def __init__(
+        self, in_shape: torch.Size, num_classes: int, hyperparams: HPARAM_TYPE
+    ):
+        super().__init__(hyperparams)
 
         # import torchvision model
         self.resnet = resnet18()
@@ -257,7 +343,7 @@ class ResNet(MetricNetwork):
             padding=old_conv1.padding,
             bias=old_conv1.bias is not None,
         )
-        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, metric_hparams[0])
+        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, num_classes)
 
         # update return nodes (output hooks)
         new_hooks = {}

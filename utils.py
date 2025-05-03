@@ -11,9 +11,9 @@ from networks import DIBNetwork, MetricNetwork
 # defaults for command line arguments
 BATCH_SIZE = 240
 COMPILE = True
-DIB_EPOCHS = 5
+DIB_EPOCHS = 30
 EPOCHS = 5
-LR = 1e-2
+LR = 1e-3
 NUM_DEVICES = 1
 
 
@@ -56,6 +56,7 @@ def get_args():
     -nl,  --nonlinearity: nonlinearity used in hidden layers of MLP, CNN
           --num-devices: number of devices used to train the DIB network
     -opt, --optimiser: optimiser to use
+          --seed: seed for random number generation
     -w,   --widths: widths of hidden layers of MLP
     """
 
@@ -74,9 +75,7 @@ def get_args():
     parser.add_argument("--dib-epochs", default=DIB_EPOCHS, type=int)
     parser.add_argument("--epochs", default=EPOCHS, type=int)
     parser.add_argument("-lr", "--learning-rate", default=LR, type=float)
-    parser.add_argument(
-        "--loss", default="CrossEntropy", choices=["CrossEntropy", "MSE"]
-    )
+    parser.add_argument("--loss", default="CrossEntropy", choices=["CrossEntropy"])
     parser.add_argument(
         "-m", "--model", default="CNN", choices=["CNN", "ConvNeXt", "MLP", "ResNet"]
     )
@@ -101,6 +100,7 @@ def get_args():
         default="AdamW",
         choices=["AdamW", "Adam", "SGD"],
     )
+    parser.add_argument("--seed", default=0, type=int)
     parser.add_argument(
         "-w",
         "--widths",
@@ -181,20 +181,22 @@ class ComputeNC1(Callback):
                 self.layer_metrics[layer] = torch.zeros(
                     (num_classes + act_size, act_size), device=network.device
                 )
-            self.layer_metrics[layer][:num_classes] += targets.T @ activations
+            self.layer_metrics[layer][:num_classes].index_add_(
+                dim=0, index=targets, source=activations
+            )
             self.layer_metrics[layer][num_classes:] += activations.T @ activations
 
     @torch.inference_mode()
     def on_train_epoch_end(self, _trainer, network: MetricNetwork):
         """Aggregate batched NC metrics and log them"""
 
+        # TODO: come up with smarter way to load-balance
         # synchronise metrics to process 0
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             for joint_metric in self.layer_metrics.values():
                 torch.distributed.reduce(joint_metric, dst=0)
 
         # only compute and log nc on process 0
-        # TODO: come up with smarter way to load-balance
         if network.global_rank == 0:
             self.class_counts = self.class_counts.to(network.device)
             num_classes = self.class_counts.size(0)
@@ -221,6 +223,35 @@ class ComputeNC1(Callback):
         # reset NC metrics for next epoch (class counts don't change)
         self.layer_metrics.clear()
 
+    # TODO: account for train class counts ≠ val class counts
+    # NOTE: validation called before train epoch end
+    def on_validation_batch_end(
+        self,
+        _trainer,
+        network: MetricNetwork,
+        _outputs,
+        batch: list[torch.Tensor],
+        _batch_idx,
+    ):
+        pass
+
+    def on_validation_epoch_end(self, _trainer, network: MetricNetwork):
+        pass
+
+    # TODO: account for train class counts ≠ test class counts
+    def on_test_batch_end(
+        self,
+        _trainer,
+        network: MetricNetwork,
+        _outputs,
+        batch: list[torch.Tensor],
+        _batch_idx,
+    ):
+        pass
+
+    def on_test_epoch_end(self, _trainer, network: MetricNetwork):
+        pass
+
 
 class ComputeDIB(Callback):
     """Compute and log the DIB metric at the end of each epoch"""
@@ -240,17 +271,17 @@ class ComputeDIB(Callback):
         self.num_devices = num_devices
         self.block_indices = block_indices
         self.no_compile = no_compile
-        self.dib_nets: list[DIBNetwork]
+        self.dib_nets: list[DIBNetwork] = []
 
     def on_train_start(self, _trainer, network: MetricNetwork):
         """Create DIB networks for each block"""
-        self.dib_nets = []
         for block_idx in self.block_indices:
             dib_net = DIBNetwork(
                 *network.get_encoder_decoder(block_idx),
                 self.num_decoders,
                 network.optimiser,
-                network.learning_rate,
+                network.learning_rate,  # TODO: find optimal learning rate for DIB
+                network.num_classes,
                 total_steps(
                     len(self.dib_dm.train), self.dib_dm.batch_size, self.dib_epochs
                 ),
@@ -261,7 +292,7 @@ class ComputeDIB(Callback):
     def on_train_epoch_end(self, trainer: Trainer, network: MetricNetwork):
         """Train the DIB network and log the final training loss"""
 
-        # only train DIB0 (DIB network with empty encoder) once
+        # only train DIB0 (DIB network with non-trainable encoder) once
         not_first = trainer.current_epoch > 0
         for i, block_idx in enumerate(
             self.block_indices[int(not_first) :], start=int(not_first)
@@ -289,3 +320,15 @@ class ComputeDIB(Callback):
 
             # free memory
             del dib_trainer
+
+    def on_train_end(self, _trainer, _network):
+        self.dib_nets.clear()
+
+    def on_validation_epoch_end(self, trainer: Trainer, network: MetricNetwork):
+        self.on_train_epoch_end(trainer, network)
+
+    def on_test_start(self, _trainer, network: MetricNetwork):
+        self.on_train_start(_trainer, network)
+
+    def on_test_end(self, trainer: Trainer, network: MetricNetwork):
+        self.on_train_epoch_end(trainer, network)

@@ -13,7 +13,7 @@ from networks import LOSS_TYPE, NL_TYPE, OPT_TYPE, MetricNetwork
 from utils import ComputeDIB, ComputeNC1, base_expand, get_args, total_steps
 
 args = get_args()
-seed_everything(seed=0)
+seed_everything(seed=args.seed)
 
 # convert strings to class constructors
 dataset: DATASET_TYPE
@@ -47,6 +47,7 @@ hyperparams = (
     criterion,
     optimiser,
     args.learning_rate,
+    dm.num_classes,
     total_steps(len(dm.train), dm.batch_size, args.epochs),
 )
 match args.model:
@@ -57,32 +58,24 @@ match args.model:
     case "CNN":
         model = networks.CNN(dm.input_size, nonlinearity, hyperparams)
     case _:
-        model = getattr(networks, args.model)(dm.input_size, dm.num_classes, hyperparams)
+        model = getattr(networks, args.model)(dm.input_size, hyperparams)
 model.compile(disable=not args.compile, fullgraph=True, options={"max_autotune": True})
 
-######################### hyperparameter tuning (WIP) #########################
+# create tuner
+dummy_trainer = Trainer(
+    devices=1,
+    max_epochs=-1,
+    barebones=True,
+    deterministic=True,
+)
+tuner = Tuner(dummy_trainer)
 
-# # create tuner
-# dummy_trainer = Trainer(
-#     devices=1,
-#     max_epochs=-1,
-#     barebones=True,
-#     deterministic=True,
-# )
-# tuner = Tuner(dummy_trainer)
-
-# # tune batch size
-# tuner.scale_batch_size(model, datamodule=dm, batch_arg_name="batch_size")
-
-# # tune learning rate
-# lr_finder = tuner.lr_find(
-#     model, datamodule=dm, update_attr=True, attr_name="learning_rate"
-# )
-# lr_finder.plot(suggest=True, show=True)
-
-# print("Optimal learning rate:", model.learning_rate)
-
-###############################################################################
+# tune learning rate
+lr_finder = tuner.lr_find(
+    model, datamodule=dm, update_attr=True, min_lr=1e-6, max_lr=100
+)
+if not args.compile:  # plotting breaks the computation graph
+    lr_finder.plot(suggest=True, show=True)
 
 # train model
 logger = CSVLogger(os.getcwd())
@@ -90,7 +83,6 @@ Trainer(
     devices=args.num_devices,
     max_epochs=args.epochs,
     logger=logger,
-    log_every_n_steps=1,
     benchmark=True,
     # deterministic=True, # ignored when benchmark=True
     callbacks=[
@@ -99,7 +91,7 @@ Trainer(
             dib_epochs=args.dib_epochs,
             dib_dm=dib_dm,
             num_devices=args.num_devices,
-            block_indices=list(range(model.num_blocks)),
+            block_indices=list(range(model.num_blocks + 1)),
             no_compile=not args.compile,
         ),
         ComputeNC1(class_counts=dm.class_counts),

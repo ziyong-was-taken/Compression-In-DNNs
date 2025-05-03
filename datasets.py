@@ -52,7 +52,6 @@ class DataModule(LightningDataModule):
         self.num_devices = num_devices
         self.transform = v2.Compose(
             [  # TODO: image augmentation and/or normalisation
-                # v2.Resize(224),  # ResNet18 and ConvNext-Tiny expect 224x224 images
                 v2.ToImage(),  # convert to TVTensor Image
                 v2.ToDtype(torch.float, scale=True),  # uint8 {0,…,255} to float32 [0,1]
             ]
@@ -64,13 +63,10 @@ class DataModule(LightningDataModule):
 
     def _preprocess(self, raw_data):
         """
-        Move data to the current device and reshape it to be at least 4D.
+        Reshape data to be at least 4D.
         Not part of `prepare_data` since `prepare_data` is only called on rank 0.
         """
-        device = torch.device(
-            f"cuda:{_get_rank()}" if torch.cuda.is_available() else "cpu"
-        )
-        data = torch.as_tensor(raw_data, device=device)
+        data = torch.as_tensor(raw_data)
         size_4d = data.size() + (1,) * (4 - data.dim())
         return data.reshape(size_4d).movedim(3, 1).float()
 
@@ -104,15 +100,25 @@ class DataModule(LightningDataModule):
                     self.labels,
                     # self.labels[torch.randperm(len(self.labels))],
                 )
+            case "test":
+                pass
 
     def train_dataloader(self):
         return DataLoader(
             self.train,
             batch_size=self.batch_size // self.num_devices,
             shuffle=True,
+            pin_memory=torch.cuda.is_available(),
             num_workers=max_num_workers(self.num_devices),
             persistent_workers=True,  # Keep workers alive between epochs
         )
+
+    # TODO: implement validation and test dataloaders
+    # def val_dataloader(self):
+    #     pass
+    #
+    # def test_dataloader(self):
+    #     pass
 
 
 class DIBData(DataModule):

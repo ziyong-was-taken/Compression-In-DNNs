@@ -66,7 +66,8 @@ dummy_trainer = Trainer(
     devices=1,
     max_epochs=-1,
     barebones=True,
-    deterministic=True,
+    benchmark=True,
+    # deterministic=True, # ignored when benchmark=True
 )
 tuner = Tuner(dummy_trainer)
 
@@ -79,6 +80,12 @@ if not args.compile:  # plotting breaks the computation graph
 
 # train model
 logger = CSVLogger(os.getcwd())
+if args.compile and args.num_devices > 1:
+    print(
+        "Warning: Compiling with multiple devices is not supported. Training with one device."
+        "See https://lightning.ai/docs/pytorch/stable/advanced/compile.html#limitations"
+    )
+    args.num_devices = 1  # disable multi-device training when compiling
 Trainer(
     devices=args.num_devices,
     max_epochs=args.epochs,

@@ -84,7 +84,7 @@ def get_args():
         "--nonlinearity",
         default="ReLU",
         help=(
-            "nonlinearity used in hidden layers of MLP, "
+            "nonlinearity used in hidden layers of MLP and CNN, "
             "has no effect on ConvNeXt and ResNet (yet)"
         ),
     )
@@ -173,18 +173,17 @@ class ComputeNC1(Callback):
     ):
         """Update NC metrics after each batch"""
         _, targets = batch
-        num_classes = self.class_counts.size(0)
         for layer, activations in network.batch_activations.items():
             activations = activations.flatten(start_dim=1)
             if layer not in self.layer_metrics:
                 act_size = activations.size(1)
                 self.layer_metrics[layer] = torch.zeros(
-                    (num_classes + act_size, act_size), device=network.device
+                    (self.num_classes + act_size, act_size), device=network.device
                 )
-            self.layer_metrics[layer][:num_classes].index_add_(
+            self.layer_metrics[layer][: self.num_classes].index_add_(
                 dim=0, index=targets, source=activations
             )
-            self.layer_metrics[layer][num_classes:] += activations.T @ activations
+            self.layer_metrics[layer][self.num_classes :] += activations.T @ activations
 
     @torch.inference_mode()
     def on_train_epoch_end(self, _trainer, network: MetricNetwork):
@@ -199,17 +198,16 @@ class ComputeNC1(Callback):
         # only compute and log nc on process 0
         if network.global_rank == 0:
             self.class_counts = self.class_counts.to(network.device)
-            num_classes = self.class_counts.size(0)
             nc: dict[str, torch.Tensor] = {}
             total_count = self.class_counts.sum()
             for layer, joint_metric in self.layer_metrics.items():
-                class_sums = joint_metric[:num_classes]
+                class_sums = joint_metric[: self.num_classes]
                 class_means = class_sums / self.class_counts.unsqueeze(dim=1)
                 global_mean = class_sums.sum(dim=0) / total_count
                 centred_means = class_means - global_mean
-                between_cov = (centred_means.T @ centred_means) / num_classes
+                between_cov = (centred_means.T @ centred_means) / self.num_classes
                 within_cov = (
-                    joint_metric[num_classes:] / total_count
+                    joint_metric[self.num_classes :] / total_count
                     - torch.outer(global_mean, global_mean)
                     - between_cov
                 )
@@ -280,7 +278,7 @@ class ComputeDIB(Callback):
                 *network.get_encoder_decoder(block_idx),
                 self.num_decoders,
                 network.optimiser,
-                network.learning_rate,  # TODO: find optimal learning rate for DIB
+                network.learning_rate,
                 network.num_classes,
                 total_steps(
                     len(self.dib_dm.train), self.dib_dm.batch_size, self.dib_epochs

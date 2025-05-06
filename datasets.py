@@ -1,10 +1,8 @@
 import torch
 from lightning import LightningDataModule
 from lightning.fabric.utilities import suggested_max_num_workers as max_num_workers
-from lightning.fabric.utilities.rank_zero import _get_rank
 from torch.utils.data import DataLoader, TensorDataset
-from torchvision import datasets as torchdata
-from torchvision.datasets import VisionDataset
+from torchvision.datasets import CIFAR10, MNIST, FashionMNIST, VisionDataset
 from torchvision.transforms import v2
 
 
@@ -37,7 +35,8 @@ class SZT(VisionDataset):
 
 
 # has to be after definition of SZT
-DATASET_TYPE = type[torchdata.CIFAR10 | torchdata.FashionMNIST | torchdata.MNIST | SZT]
+DATASET_TYPE = type[CIFAR10 | FashionMNIST | MNIST | SZT]
+BASE_DATASET_TYPE = CIFAR10 | FashionMNIST | MNIST | SZT
 
 
 class DataModule(LightningDataModule):
@@ -62,17 +61,14 @@ class DataModule(LightningDataModule):
             self.dataset(self.data_dir, train=train, download=True)
 
     def _preprocess(self, raw_data):
-        """
-        Reshape data to be at least 4D.
-        Not part of `prepare_data` since `prepare_data` is only called on rank 0.
-        """
+        """Reshape data to be at least 4D."""
         data = torch.as_tensor(raw_data)
         size_4d = data.size() + (1,) * (4 - data.dim())
         return data.reshape(size_4d).movedim(3, 1).float()
 
     def setup(self, stage):
         """
-        Setup the train and test datasets.
+        Setup the train and validation datasets.
         When training, compute the
         - input size,
         - output size,
@@ -81,63 +77,92 @@ class DataModule(LightningDataModule):
         """
         match stage:
             case "fit":
-                base_ds = self.dataset(
-                    self.data_dir, train=True, transform=self.transform
-                )
+                # use test set for validation (okay since no model selection is done)
+                train_ds, val_ds = [
+                    self.dataset(self.data_dir, train=train, transform=self.transform)
+                    for train in (True, False)
+                ]
 
-                # TODO: train-validation split
-                self.input_size = base_ds[0][0].size()
-                self.num_classes = len(base_ds.classes)
-                self.labels = torch.as_tensor(base_ds.targets)
-                self.class_counts = self.labels.bincount()
-                assert self.num_classes == (count := self.class_counts.size(0)), (
-                    f"Dataset supposedly has {self.num_classes} classes, "
-                    f"but only {count} different labels found"
-                )
+                # train set metrics
+                self.input_size = train_ds[0][0].size()
+                self.num_classes = len(train_ds.classes)
+                self.train_labels = torch.as_tensor(train_ds.targets)
+                self.train_class_counts = self.train_labels.bincount()
 
+                # val set metrics
+                val_input_size = val_ds[0][0].size()
+                val_num_classes = len(val_ds.classes)
+                self.val_labels = torch.as_tensor(val_ds.targets)
+                self.val_class_counts = self.val_labels.bincount()
+
+                # sanity checks
+                assert self.input_size == val_input_size, (
+                    "Input size of train set does not match that of val set"
+                )
+                assert self.num_classes == val_num_classes, (
+                    "Number of classes in train set does not match that of validation set"
+                )
+                for name, num_classes, class_counts in zip(
+                    ("Train", "Validation"),
+                    (self.num_classes, val_num_classes),
+                    (self.train_class_counts, self.val_class_counts),
+                ):
+                    assert num_classes == (count := class_counts.size(0)), (
+                        f"{name} dataset supposedly has {num_classes} classes, "
+                        f"but only {count} different labels found."
+                    )
+
+                # define datasets
                 self.train = TensorDataset(
-                    self._preprocess(base_ds.data),
-                    self.labels,
-                    # self.labels[torch.randperm(len(self.labels))],
+                    self._preprocess(train_ds.data), self.train_labels
                 )
-            case "test":
-                pass
+                self.val = TensorDataset(self._preprocess(val_ds.data), self.val_labels)
 
-    def train_dataloader(self):
+    def _dataloader(self, dataset, shuffle: bool):
         return DataLoader(
-            self.train,
+            dataset,
             batch_size=self.batch_size // self.num_devices,
-            shuffle=True,
+            shuffle=shuffle,
             pin_memory=torch.cuda.is_available(),
             num_workers=max_num_workers(self.num_devices),
             persistent_workers=True,  # Keep workers alive between epochs
         )
 
-    # TODO: implement validation and test dataloaders
-    # def val_dataloader(self):
-    #     pass
-    #
-    # def test_dataloader(self):
-    #     pass
+    def train_dataloader(self):
+        return self._dataloader(self.train, shuffle=True)
+
+    def val_dataloader(self):
+        return self._dataloader(self.val, shuffle=False)
 
 
 class DIBData(DataModule):
-    def __init__(self, datamodule: DataModule, dib_labels: torch.Tensor):
+    def __init__(
+        self,
+        datamodule: DataModule,
+        train_dib_labels: torch.Tensor,
+        val_dib_labels: torch.Tensor,
+    ):
         super().__init__(
             datamodule.dataset,
             datamodule.data_dir,
             datamodule.batch_size,
             datamodule.num_devices,
         )
-        self.dib_labels = dib_labels
+        self.train_dib_labels = train_dib_labels
+        self.val_dib_labels = val_dib_labels
 
     def setup(self, stage):
         """Create the train dataset with new labels."""
         match stage:
             case "fit":
-                base_ds = self.dataset(
-                    self.data_dir, train=True, transform=self.transform
-                )
+                # use test set for validation (okay since no model selection is done)
+                train_ds, val_ds = [
+                    self.dataset(self.data_dir, train=train, transform=self.transform)
+                    for train in (True, False)
+                ]
                 self.train = TensorDataset(
-                    self._preprocess(base_ds.data), self.dib_labels
+                    self._preprocess(train_ds.data), self.train_dib_labels
+                )
+                self.val = TensorDataset(
+                    self._preprocess(val_ds.data), self.val_dib_labels
                 )

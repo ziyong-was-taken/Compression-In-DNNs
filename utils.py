@@ -1,5 +1,7 @@
 import argparse
+import copy
 import math
+from typing import Literal
 
 import torch
 from lightning import Callback, Trainer
@@ -7,13 +9,12 @@ from lightning import Callback, Trainer
 from datasets import DIBData
 from networks import DIBNetwork, MetricNetwork
 
-
 # defaults for command line arguments
-BATCH_SIZE = 240
+BATCH_SIZE = 400
 COMPILE = True
 DIB_EPOCHS = 30
-EPOCHS = 5
-LR = 1e-3
+EPOCHS = 15
+LR = 2e-3
 NUM_DEVICES = 1
 
 
@@ -63,12 +64,19 @@ def get_args():
     parser = CustomArgParser()
     parser.add_argument("-b", "--batch-size", default=BATCH_SIZE, type=int)
     parser.add_argument(
-        "-c", "--compile", action=argparse.BooleanOptionalAction, default=COMPILE
+        "-c",
+        "--compile",
+        action=argparse.BooleanOptionalAction,
+        default=COMPILE,
+        help=(
+            "may not work with multiple devices, "
+            "see (https://lightning.ai/docs/pytorch/stable/advanced/compile.html#limitations)"
+        ),
     )
     parser.add_argument(
         "-d",
         "--dataset",
-        default="MNIST",
+        default="CIFAR10",
         choices=["CIFAR10", "FashionMNIST", "MNIST", "SZT"],
     )
     parser.add_argument("--data-dir", default="data")
@@ -144,7 +152,12 @@ def base_expand(labels: torch.Tensor, num_classes: int):
 class ComputeNC1(Callback):
     """Compute and log NC metrics at the end of each epoch"""
 
-    def __init__(self, class_counts: torch.Tensor):
+    def __init__(
+        self,
+        train_class_counts: torch.Tensor,
+        val_class_counts: torch.Tensor,
+        num_classes: int,
+    ):
         """
         Store metrics for each layer as dict `layer_metrics`.
         Let zˡ be the size of the flattened activations of layer l and
@@ -154,19 +167,13 @@ class ComputeNC1(Callback):
         - `layer_metrics[l][:C]` are the per-class activation sums
         - `layer_metrics[l][C:]` is the gram matrix
         """
-        self.class_counts = class_counts
-        self.num_classes = class_counts.size(0)
+        self.train_class_counts = train_class_counts
+        self.val_class_counts = val_class_counts
+        self.num_classes = num_classes
         self.layer_metrics: dict[str, torch.Tensor] = {}
 
     @torch.inference_mode()
-    def on_train_batch_end(
-        self,
-        _trainer,
-        network: MetricNetwork,
-        _outputs,
-        batch: list[torch.Tensor],
-        _batch_idx,
-    ):
+    def _on_batch_end(self, network: MetricNetwork, batch: list[torch.Tensor]):
         """Update NC metrics after each batch"""
         _, targets = batch
         for layer, activations in network.batch_activations.items():
@@ -181,8 +188,30 @@ class ComputeNC1(Callback):
             )
             self.layer_metrics[layer][self.num_classes :] += activations.T @ activations
 
+    def on_train_batch_end(
+        self,
+        _trainer,
+        network: MetricNetwork,
+        _outputs,
+        batch: list[torch.Tensor],
+        _batch_idx,
+    ):
+        self._on_batch_end(network, batch)
+
+    def on_validation_batch_end(
+        self,
+        _trainer,
+        network: MetricNetwork,
+        _outputs,
+        batch: list[torch.Tensor],
+        _batch_idx,
+    ):
+        self._on_batch_end(network, batch)
+
     @torch.inference_mode()
-    def on_train_epoch_end(self, _trainer, network: MetricNetwork):
+    def _on_epoch_end(
+        self, network: MetricNetwork, state: str, class_counts: torch.Tensor
+    ):
         """Aggregate batched NC metrics and log them"""
 
         # TODO: come up with smarter way to load-balance
@@ -193,12 +222,12 @@ class ComputeNC1(Callback):
 
         # only compute and log nc on process 0
         if network.global_rank == 0:
-            self.class_counts = self.class_counts.to(network.device)
             nc: dict[str, torch.Tensor] = {}
-            total_count = self.class_counts.sum()
+            class_counts = class_counts.to(network.device)
+            total_count = class_counts.sum()
             for layer, joint_metric in self.layer_metrics.items():
                 class_sums = joint_metric[: self.num_classes]
-                class_means = class_sums / self.class_counts.unsqueeze(dim=1)
+                class_means = class_sums / class_counts.unsqueeze(dim=1)
                 global_mean = class_sums.sum(dim=0) / total_count
                 centred_means = class_means - global_mean
                 between_cov = (centred_means.T @ centred_means) / self.num_classes
@@ -207,44 +236,36 @@ class ComputeNC1(Callback):
                     - torch.outer(global_mean, global_mean)
                     - between_cov
                 )
-                nc[layer] = torch.linalg.lstsq(
+                nc[f"{layer}_{state}"] = torch.linalg.lstsq(
                     between_cov.cpu(),  # gelsd only supported on CPU
                     within_cov.cpu(),  # gelsd only supported on CPU
                     driver="gelsd",
                 ).solution.trace()
             network.log_dict(nc, rank_zero_only=True)
 
-        # reset NC metrics for next epoch (class counts don't change)
+        # reset NC metrics for next epoch
         self.layer_metrics.clear()
 
-    # TODO: account for train class counts ≠ val class counts
-    # NOTE: validation called before train epoch end
-    def on_validation_batch_end(
-        self,
-        _trainer,
-        network: MetricNetwork,
-        _outputs,
-        batch: list[torch.Tensor],
-        _batch_idx,
-    ):
-        pass
+    def on_train_epoch_end(self, _trainer, network: MetricNetwork):
+        self._on_epoch_end(network, "train", self.train_class_counts)
 
     def on_validation_epoch_end(self, _trainer, network: MetricNetwork):
-        pass
+        self._on_epoch_end(network, "val", self.val_class_counts)
 
-    # TODO: account for train class counts ≠ test class counts
-    def on_test_batch_end(
-        self,
-        _trainer,
-        network: MetricNetwork,
-        _outputs,
-        batch: list[torch.Tensor],
-        _batch_idx,
-    ):
-        pass
+    def on_validation_start(self, _trainer, network: MetricNetwork):
+        """
+        Store and reset training metrics.
+        Necessary since validation called before train epoch end
+        """
+        self.train_batch_activations = copy.deepcopy(network.batch_activations)
+        self.train_layer_metrics = copy.deepcopy(self.layer_metrics)
+        network.batch_activations.clear()
+        self.layer_metrics.clear()
 
-    def on_test_epoch_end(self, _trainer, network: MetricNetwork):
-        pass
+    def on_validation_end(self, _trainer, network: MetricNetwork):
+        """Restore training metrics"""
+        network.batch_activations = self.train_batch_activations
+        self.layer_metrics = self.train_layer_metrics
 
 
 class ComputeDIB(Callback):
@@ -252,38 +273,49 @@ class ComputeDIB(Callback):
 
     def __init__(
         self,
-        num_decoders: int,
+        num_decoders_train: int,
+        num_decoders_val: int,
         dib_epochs: int,
         dib_dm: DIBData,
         num_devices: int,
         block_indices: list[int],
         no_compile: bool,
     ):
-        self.num_decoders = num_decoders
+        self.num_decoders = {"train": num_decoders_train, "val": num_decoders_val}
         self.dib_epochs = dib_epochs
         self.dib_dm = dib_dm
         self.num_devices = num_devices
         self.block_indices = block_indices
         self.no_compile = no_compile
-        self.dib_nets: list[DIBNetwork] = []
+        self.dib_nets: dict[str, list[DIBNetwork]] = {"train": [], "val": []}
 
-    def on_train_start(self, _trainer, network: MetricNetwork):
+    def on_fit_start(self, _trainer, network: MetricNetwork):
         """Create DIB networks for each block"""
-        for block_idx in self.block_indices:
-            steps_per_epoch = len(self.dib_dm.train_dataloader())
-            dib_net = DIBNetwork(
-                *network.get_encoder_decoder(block_idx),
-                self.num_decoders,
-                network.optimiser,
-                network.learning_rate,
-                network.num_classes,
-                steps_per_epoch * self.dib_epochs,
-                ),
-            )
-            dib_net.compile(disable=self.no_compile)
-            self.dib_nets.append(dib_net)
+        for state in ("train", "val"):
+            for block_idx in self.block_indices:
+                steps_per_epoch = len(getattr(self.dib_dm, f"{state}_dataloader")())
+                dib_net = DIBNetwork(
+                    *network.get_encoder_decoder(block_idx),
+                    self.num_decoders[state],
+                    network.optimiser,
+                    network.learning_rate,
+                    network.num_classes,
+                    steps_per_epoch * self.dib_epochs,
+                )
+                dib_net.compile(
+                    disable=self.no_compile,
+                    fullgraph=True,
+                    options={"max_autotune": True},
+                )
+                self.dib_nets[state].append(dib_net)
 
-    def on_train_epoch_end(self, trainer: Trainer, network: MetricNetwork):
+    def _on_epoch_end(
+        self,
+        trainer: Trainer,
+        network: MetricNetwork,
+        state: Literal["train", "val"],
+        dataloader,
+    ):
         """Train the DIB network and log the final training loss"""
 
         # only train DIB0 (DIB network with non-trainable encoder) once
@@ -291,9 +323,10 @@ class ComputeDIB(Callback):
         for i, block_idx in enumerate(
             self.block_indices[int(not_first) :], start=int(not_first)
         ):
-            # update encoder
+            # update DIB network before training
             encoder, _ = network.get_encoder_decoder(block_idx)
-            self.dib_nets[i].update_encoder(encoder)
+            self.dib_nets[state][i].update_encoder(encoder)
+            self.dib_nets[state][i].reset_decoders()
 
             # train DIB network
             dib_trainer = Trainer(
@@ -304,25 +337,20 @@ class ComputeDIB(Callback):
                 benchmark=True,
                 # deterministic=True, # ignored when benchmark=True
             )
-            dib_trainer.fit(self.dib_nets[i], datamodule=self.dib_dm)
+            dib_trainer.fit(self.dib_nets[state][i], dataloader)
 
             # only log on process 0 since value is the same for all processes
             if network.global_rank == 0:
                 # log final training loss, i.e., decodable information
                 dib = dib_trainer.logged_metrics["train_loss"]
-                network.log(f"dib_{block_idx}", dib, rank_zero_only=True)
+                network.log(f"dib_{block_idx}_{state}", dib, rank_zero_only=True)
 
-            # free memory
-            del dib_trainer
-
-    def on_train_end(self, _trainer, _network):
-        self.dib_nets.clear()
+    def on_train_epoch_end(self, trainer: Trainer, network: MetricNetwork):
+        self._on_epoch_end(trainer, network, "train", self.dib_dm.train_dataloader())
 
     def on_validation_epoch_end(self, trainer: Trainer, network: MetricNetwork):
-        self.on_train_epoch_end(trainer, network)
+        self._on_epoch_end(trainer, network, "val", self.dib_dm.val_dataloader())
 
-    def on_test_start(self, _trainer, network: MetricNetwork):
-        self.on_train_start(_trainer, network)
-
-    def on_test_end(self, trainer: Trainer, network: MetricNetwork):
-        self.on_train_epoch_end(trainer, network)
+    def on_fit_end(self, _trainer, _network):
+        """Clear DIB networks and free memory"""
+        self.dib_nets.clear()

@@ -5,7 +5,7 @@ import torch
 from lightning import LightningModule
 from torch import nn, optim
 from torch.optim.lr_scheduler import OneCycleLR
-from torchmetrics.functional.classification import accuracy
+from torchmetrics.functional.classification import multiclass_accuracy
 from torchvision.models import convnext_tiny, resnet18
 
 NL_TYPE = type[nn.ReLU | nn.Tanh]
@@ -50,11 +50,11 @@ class _Network(LightningModule):
         self.log("train_loss", loss, sync_dist=True)
 
         with torch.inference_mode():
-            train_acc = accuracy(
-                preds.argmax(dim=1), targets, "multiclass", num_classes=self.num_classes
+            acc = multiclass_accuracy(
+                preds.argmax(dim=1), targets, num_classes=self.num_classes
             )
-            self.log("train_acc", train_acc, sync_dist=True)
-            # self.log("lr", self.lr_schedulers().get_last_lr()[0])
+            self.log("train_acc", acc, sync_dist=True)
+            self.log("lr", self.lr_schedulers().get_last_lr()[0])
 
         return loss
 
@@ -118,9 +118,9 @@ class DIBNetwork(_Network):
         """Update the parameters of the encoder"""
         self.encoder.load_state_dict(encoder.state_dict())
 
-    def on_fit_start(self):
+    def reset_decoders(self):
         """
-        Reset decoder weights before training.
+        Reset decoder weights.
         See https://discuss.pytorch.org/t/how-to-re-set-alll-parameters-in-a-network/20819
         """
 
@@ -136,12 +136,7 @@ class DIBNetwork(_Network):
 
     def forward(self, x):
         encoded = self.encoder(x)
-        if torch.cuda.is_available():
-            outputs = nn.parallel.parallel_apply(
-                (*self.decoders,), (encoded,) * len(self.decoders)
-            )
-        else:
-            outputs = [d(encoded) for d in self.decoders]
+        outputs = [d(encoded) for d in self.decoders]
         return torch.stack(outputs, dim=-1)
 
     def _opt_parameters(self):
@@ -172,13 +167,17 @@ class MetricNetwork(_Network):
         for name, module in new_hooks.items():
             module.register_forward_hook(get_hook(name))
 
-    # TODO
     def validation_step(self, batch: list[torch.Tensor]):
-        pass
-
-    # TODO
-    def test_step(self, batch: list[torch.Tensor]):
-        pass
+        """Compute and log average validation loss"""
+        inputs, targets = batch
+        preds: torch.Tensor = self(inputs)
+        loss = self.criterion()(preds, targets)
+        acc = multiclass_accuracy(
+            preds.argmax(dim=1), targets, num_classes=self.num_classes
+        )
+        self.log("val_loss", loss, sync_dist=True)
+        self.log("val_acc", acc, sync_dist=True)
+        return loss
 
     def _check_encoder_blocks(self, encoder_blocks: int):
         assert encoder_blocks <= self.num_blocks, (
@@ -238,10 +237,7 @@ class CNN(MetricNetwork):
     """
 
     def __init__(
-        self,
-        in_shape: torch.Size,
-        nonlinearity: NL_TYPE,
-        hyperparams: HPARAM_TYPE,
+        self, in_shape: torch.Size, nonlinearity: NL_TYPE, hyperparams: HPARAM_TYPE
     ):
         super().__init__(hyperparams)
 

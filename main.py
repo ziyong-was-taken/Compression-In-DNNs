@@ -3,17 +3,18 @@ import os
 from lightning import Trainer, seed_everything
 from lightning.pytorch.loggers import CSVLogger
 from lightning.pytorch.tuner.tuning import Tuner
-from torch import nn, optim
+from torch import nn, optim, set_float32_matmul_precision
 from torchvision import datasets as torchdata
 
 import datasets
 import networks
 from datasets import DATASET_TYPE, DataModule, DIBData
 from networks import LOSS_TYPE, NL_TYPE, OPT_TYPE, MetricNetwork
-from utils import ComputeDIB, ComputeNC1, base_expand, get_args, total_steps
+from utils import ComputeDIB, ComputeNC1, base_expand, get_args
 
 args = get_args()
 seed_everything(seed=args.seed)
+set_float32_matmul_precision("high")
 
 # convert strings to class constructors
 dataset: DATASET_TYPE
@@ -36,8 +37,9 @@ dm.prepare_data()
 dm.setup("fit")
 
 # setup DIB datamodule
-dib_labels = base_expand(dm.labels, dm.num_classes)
-dib_dm = DIBData(dm, dib_labels)
+dib_train_labels = base_expand(dm.train_labels, dm.num_classes)
+dib_val_labels = base_expand(dm.val_labels, dm.num_classes)
+dib_dm = DIBData(dm, dib_train_labels, dib_val_labels)
 dib_dm.prepare_data()
 dib_dm.setup("fit")
 
@@ -55,8 +57,8 @@ match args.model:
         model = networks.MLP(
             [dm.input_size.numel()] + args.widths, nonlinearity, hyperparams
         )
-    case "CNN":
-        model = networks.CNN(dm.input_size, nonlinearity, hyperparams)
+    case "CNN" | "CIFARNet":
+        model = getattr(networks, args.model)(dm.input_size, nonlinearity, hyperparams)
     case _:
         model = getattr(networks, args.model)(dm.input_size, hyperparams)
 model.compile(disable=not args.compile, fullgraph=True, options={"max_autotune": True})
@@ -72,35 +74,30 @@ dummy_trainer = Trainer(
 tuner = Tuner(dummy_trainer)
 
 # tune learning rate
-lr_finder = tuner.lr_find(
-    model, datamodule=dm, update_attr=True, min_lr=1e-6, max_lr=100
-)
+lr_finder = tuner.lr_find(model, datamodule=dm, update_attr=True)
 if not args.compile:  # plotting breaks the computation graph
     lr_finder.plot(suggest=True, show=True)
 
 # train model
 logger = CSVLogger(os.getcwd())
-if args.compile and args.num_devices > 1:
-    print(
-        "Warning: Compiling with multiple devices is not supported. Training with one device."
-        "See https://lightning.ai/docs/pytorch/stable/advanced/compile.html#limitations"
-    )
-    args.num_devices = 1  # disable multi-device training when compiling
 Trainer(
     devices=args.num_devices,
     max_epochs=args.epochs,
     logger=logger,
+    log_every_n_steps=25,
     benchmark=True,
     # deterministic=True, # ignored when benchmark=True
+    num_sanity_val_steps=0,
     callbacks=[
         ComputeDIB(
-            num_decoders=dib_labels.size(1),
+            num_decoders_train=dib_train_labels.size(1),
+            num_decoders_val=dib_val_labels.size(1),
             dib_epochs=args.dib_epochs,
             dib_dm=dib_dm,
             num_devices=args.num_devices,
             block_indices=list(range(model.num_blocks + 1)),
             no_compile=not args.compile,
         ),
-        ComputeNC1(class_counts=dm.class_counts),
+        ComputeNC1(dm.train_class_counts, dm.val_class_counts, dm.num_classes),
     ],
 ).fit(model, datamodule=dm)

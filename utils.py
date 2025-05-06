@@ -113,10 +113,6 @@ def get_args():
     return parser.parse_args()
 
 
-def total_steps(len_dataset: int, batch_size: int, num_epochs: int):
-    return math.ceil(len_dataset // batch_size) * num_epochs
-
-
 def base_expand(labels: torch.Tensor, num_classes: int):
     r"""
     Generate random relabeling `N` of the data where `N[i,:]` are
@@ -274,14 +270,14 @@ class ComputeDIB(Callback):
     def on_train_start(self, _trainer, network: MetricNetwork):
         """Create DIB networks for each block"""
         for block_idx in self.block_indices:
+            steps_per_epoch = len(self.dib_dm.train_dataloader())
             dib_net = DIBNetwork(
                 *network.get_encoder_decoder(block_idx),
                 self.num_decoders,
                 network.optimiser,
                 network.learning_rate,
                 network.num_classes,
-                total_steps(
-                    len(self.dib_dm.train), self.dib_dm.batch_size, self.dib_epochs
+                steps_per_epoch * self.dib_epochs,
                 ),
             )
             dib_net.compile(disable=self.no_compile)

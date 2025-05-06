@@ -48,7 +48,7 @@ hyperparams = (
     optimiser,
     args.learning_rate,
     dm.num_classes,
-    total_steps(len(dm.train), dm.batch_size, args.epochs),
+    len(dm.train_dataloader()) * args.epochs,
 )
 match args.model:
     case "MLP":

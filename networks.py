@@ -300,6 +300,75 @@ class CNN(MetricNetwork):
         return encoder, decoder
 
 
+class CIFARNet(MetricNetwork):
+    """
+    The current 94% CIFAR-10 speedrun world record holder by Keller Jordan.
+    https://github.com/KellerJordan/cifar10-airbench
+    """
+
+    def __init__(
+        self, in_shape: torch.Size, nonlinearity: NL_TYPE, hyperparams: HPARAM_TYPE
+    ):
+        super().__init__(hyperparams)
+
+        channels = (24, 64, 256, 256)
+        # TODO: what to do with whitening?
+        self.whiten = nn.Sequential(
+            nn.Conv2d(in_shape[0], channels[0], 2), nonlinearity()
+        )
+        self.blocks = nn.Sequential(
+            *[
+                nn.Sequential(
+                    OrderedDict(
+                        {
+                            "conv1": nn.Conv2d(
+                                in_channels, out_channels, 3, padding="same", bias=False
+                            ),
+                            "pool": nn.MaxPool2d(2),
+                            "norm1": nn.BatchNorm2d(out_channels, affine=False),
+                            "nl1": nonlinearity(),
+                            "conv2": nn.Conv2d(
+                                out_channels,
+                                out_channels,
+                                3,
+                                padding="same",
+                                bias=False,
+                            ),
+                            "norm2": nn.BatchNorm2d(out_channels, affine=False),
+                            "nl2": nonlinearity(),
+                        }
+                    )
+                )
+                for in_channels, out_channels in zip(channels[:-1], channels[1:])
+            ]
+        )
+        self.head = nn.Sequential(
+            OrderedDict(
+                {
+                    "pool": nn.MaxPool2d(3),
+                    "flatten": nn.Flatten(),
+                    "fc": nn.Linear(channels[-1], hyperparams[3], bias=False),
+                }
+            )
+        )
+
+        # update return nodes (output hooks)
+        self._register_hooks(
+            {f"nc_layer_{i}": block.nl2 for i, block in enumerate(self.blocks)}
+            | {"nc_output": self.head.fc}
+        )
+        self.num_blocks = len(self.blocks)
+
+    def forward(self, x):
+        return self.head(self.blocks(self.whiten(x)))
+
+    def get_encoder_decoder(self, encoder_blocks):
+        super()._check_encoder_blocks(encoder_blocks)
+        encoder = nn.Sequential(self.whiten, *self.blocks[:encoder_blocks])
+        decoder = nn.Sequential(*self.blocks[encoder_blocks:], self.head)
+        return encoder, decoder
+
+
 class ConvNeXt(MetricNetwork):
     def __init__(self, in_shape: torch.Size, hyperparams: HPARAM_TYPE):
         super().__init__(hyperparams)

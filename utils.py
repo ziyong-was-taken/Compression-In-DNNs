@@ -85,7 +85,7 @@ def get_args():
     parser.add_argument("-lr", "--learning-rate", default=LR, type=float)
     parser.add_argument("--loss", default="CrossEntropy", choices=["CrossEntropy"])
     parser.add_argument(
-        "-m", "--model", default="CNN", choices=["CNN", "ConvNeXt", "MLP", "ResNet"]
+        "-m", "--model", default="CNN", choices=["CIFARNet", "CNN", "ConvNeXt", "MLP", "ResNet"]
     )
     parser.add_argument(
         "-nl",

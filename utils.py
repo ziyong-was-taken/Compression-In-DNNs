@@ -248,23 +248,30 @@ class ComputeDIB(Callback):
 
     def __init__(
         self,
-        num_decoders_train: int,
-        num_decoders_val: int,
         dib_epochs: int,
         dib_dm: DIBData,
         num_devices: int,
-        block_indices: list[int],
+        *block_indices: int,
     ):
-        self.num_decoders = {"train": num_decoders_train, "val": num_decoders_val}
+        self.num_decoders = {
+            dataset: getattr(dib_dm, f"{dataset}_dib_labels").size(1)
+            for dataset in ("train", "val")
+        }
         self.dib_epochs = dib_epochs
         self.dib_dm = dib_dm
         self.num_devices = num_devices
         self.block_indices = block_indices
         self.dib_nets: dict[str, list[DIBNetwork]] = {}
 
-    def on_fit_start(self, _trainer, network: MetricNetwork):
+    def on_train_start(self, _trainer, network: MetricNetwork):
         """Create DIB networks for each block"""
-        hyperparams = (network.criterion, network.optimiser, network.learning_rate, network.num_classes, network.total_steps, network.no_compile)
+
+        # default to all blocks if no block indices were given
+        if not self.block_indices :
+            self.block_indices = list(range(network.num_blocks + 1))
+
+        # create DIB networks for each block for both datasets
+        hyperparams = tuple(network.hparams_initial.values())
         for dataset in ("train", "val"):
             steps_per_epoch = len(getattr(self.dib_dm, f"{dataset}_dataloader")())
             total_steps = steps_per_epoch * self.dib_epochs
@@ -278,45 +285,42 @@ class ComputeDIB(Callback):
                 for block_idx in self.block_indices
             ]
 
-    def _on_epoch_end(
-        self, trainer: Trainer, network: MetricNetwork, dataset: Literal["train", "val"]
-    ):
-        """Train the DIB network and log the final training loss"""
-
-        # only train DIB0 (DIB network with non-trainable encoder) once
-        not_first = trainer.current_epoch > 0
-        for i, block_idx in enumerate(
-            self.block_indices[int(not_first) :], start=int(not_first)
-        ):
-            # update DIB network before training
-            encoder, _ = network.get_encoder_decoder(block_idx)
-            self.dib_nets[dataset][i].update_encoder(encoder)
-            self.dib_nets[dataset][i].reset_decoders()
-
-            # train DIB network
-            dib_trainer = Trainer(
-                devices=self.num_devices,
-                max_epochs=self.dib_epochs,
-                logger=False,  # don't write (but do store) training losses
-                default_root_dir="lightning_logs",
-                benchmark=True,
-                # deterministic=True, # ignored when benchmark=True
-            )
-            dib_trainer.fit(
-                self.dib_nets[dataset][i],
-                getattr(self.dib_dm, f"{dataset}_dataloader")(),
-            )
-
-            # only log on process 0 since value is the same for all processes
-            if network.global_rank == 0:
-                # log final training loss, i.e., decodable information
-                dib = dib_trainer.logged_metrics["train_loss"]
-                network.log(f"dib_{block_idx}_{dataset}", dib, rank_zero_only=True)
-
     def on_train_epoch_end(self, trainer: Trainer, network: MetricNetwork):
+        """
+        Train the DIB network on both the training and validation DIB set
+        and log the final training loss for both sets.
+        """
         for dataset in ("train", "val"):
-            self._on_epoch_end(trainer, network, dataset)
+            # only train DIB0 (DIB network with non-trainable encoder) once
+            not_first = trainer.current_epoch > 0
+            for i, block_idx in enumerate(
+                self.block_indices[int(not_first) :], start=int(not_first)
+            ):
+                # update DIB network before training
+                encoder, _ = network.get_encoder_decoder(block_idx)
+                self.dib_nets[dataset][i].update_encoder(encoder)
+                self.dib_nets[dataset][i].reset_decoders()
 
-    def on_fit_end(self, _trainer, _network):
+                # train DIB network
+                dib_trainer = Trainer(
+                    devices=self.num_devices,
+                    max_epochs=self.dib_epochs,
+                    logger=False,  # don't write (but do store) training losses
+                    default_root_dir="lightning_logs",
+                    benchmark=True,
+                    # deterministic=True, # ignored when benchmark=True
+                )
+                dib_trainer.fit(
+                    self.dib_nets[dataset][i],
+                    getattr(self.dib_dm, f"{dataset}_dataloader")(),
+                )
+
+                # only log on process 0 since value is the same for all processes
+                if network.global_rank == 0:
+                    # log final training loss, i.e., decodable information
+                    dib = dib_trainer.logged_metrics["train_loss"]
+                    network.log(f"dib_{block_idx}_{dataset}", dib, rank_zero_only=True)
+
+    def on_train_end(self, _trainer, _network):
         """Clear DIB networks and free memory"""
         self.dib_nets.clear()

@@ -37,13 +37,7 @@ class _Network(LightningModule):
         no_compile: bool,
     ):
         super().__init__()
-
-        # store architecture parameters
-        self.criterion = criterion
-        self.optimiser = optimiser
-        self.learning_rate = learning_rate
-        self.num_classes = num_classes
-        self.total_steps = total_steps
+        self.save_hyperparameters()
 
     def configure_model(self):
         self = self.to(memory_format=torch.channels_last)
@@ -59,13 +53,15 @@ class _Network(LightningModule):
     def training_step(self, batch: list[torch.Tensor]):
         """Compute and log average training loss"""
         inputs, targets = batch
-        preds: torch.Tensor = self(inputs)
-        loss = self.criterion()(preds, targets)
+        outputs: torch.Tensor = self(inputs)
+        loss = self.hparams_initial["criterion"]()(outputs, targets)
         self.log("train_loss", loss, sync_dist=True)
 
         with torch.inference_mode():
             acc = multiclass_accuracy(
-                preds.argmax(dim=1), targets, num_classes=self.num_classes
+                outputs.argmax(dim=1),
+                targets,
+                num_classes=self.hparams_initial["num_classes"],
             )
             self.log("train_acc", acc, sync_dist=True)
             self.log("lr", self.lr_schedulers().get_last_lr()[0])
@@ -77,13 +73,13 @@ class _Network(LightningModule):
         return self.parameters()
 
     def configure_optimizers(self):
-        optimiser = self.optimiser(
-            self._opt_parameters(), lr=self.learning_rate, fused=True
+        optimiser = self.hparams_initial["optimiser"](
+            self._opt_parameters(), lr=self.hparams_initial["learning_rate"], fused=True
         )
         lr_scheduler = OneCycleLR(
             optimiser,
-            max_lr=self.learning_rate,
-            total_steps=self.total_steps,
+            max_lr=self.hparams_initial["learning_rate"],
+            total_steps=self.hparams_initial["total_steps"],
             cycle_momentum=False,
         )
         return {
@@ -178,10 +174,12 @@ class MetricNetwork(_Network):
     def validation_step(self, batch: list[torch.Tensor]):
         """Compute and log average validation loss"""
         inputs, targets = batch
-        preds: torch.Tensor = self(inputs)
-        loss = self.criterion()(preds, targets)
+        outputs: torch.Tensor = self(inputs)
+        loss = self.hparams_initial["criterion"]()(outputs, targets)
         acc = multiclass_accuracy(
-            preds.argmax(dim=1), targets, num_classes=self.num_classes
+            outputs.argmax(dim=1),
+            targets,
+            num_classes=self.hparams_initial["num_classes"],
         )
         self.log("val_loss", loss, sync_dist=True)
         self.log("val_acc", acc, sync_dist=True)

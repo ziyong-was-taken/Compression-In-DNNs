@@ -16,7 +16,7 @@ class SZT(VisionDataset):
     def __init__(
         self,
         root: str,
-        train: bool,  # currently useless
+        train: bool,  # only for compatibility
         transform=None,
         download: bool = False,  # only for compatibility
     ):
@@ -39,7 +39,6 @@ class SZT(VisionDataset):
 
 # has to be after definition of SZT
 DATASET_TYPE = type[CIFAR10 | FashionMNIST | MNIST | SZT]
-BASE_DATASET_TYPE = CIFAR10 | FashionMNIST | MNIST | SZT
 
 
 class DataModule(LightningDataModule):
@@ -64,7 +63,7 @@ class DataModule(LightningDataModule):
             self.dataset(self.data_dir, train=train, download=True)
 
     def _preprocess(self, raw_data):
-        """Reshape data to be at least 4D."""
+        """Reshape data to be at least 4D with dimensions (N,C,H,W)"""
         data = torch.as_tensor(raw_data)
         size_4d = data.size() + (1,) * (4 - data.dim())
         return data.reshape(size_4d).movedim(3, 1).float()

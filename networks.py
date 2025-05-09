@@ -18,7 +18,7 @@ HPARAM_TYPE = tuple[
 
 class _Network(LightningModule):
     """
-    The blueprint for a basic network with a softmax output layer.
+    The blueprint for a basic network.
     Simply implement `forward` and the blueprint handles the rest.
     """
 
@@ -177,7 +177,6 @@ class MetricNetwork(_Network):
         )
         self.log("val_loss", loss, sync_dist=True)
         self.log("val_acc", acc, sync_dist=True)
-        return loss
 
     def _check_encoder_blocks(self, encoder_blocks: int):
         assert encoder_blocks <= self.num_blocks, (
@@ -374,7 +373,7 @@ class ConvNeXt(MetricNetwork):
         super().__init__(hyperparams)
 
         # import torchvision model
-        self.convnext = convnext_tiny()
+        self.convnext = convnext_tiny(num_classes=hyperparams[3])
 
         # replace first and last layer to match input and output shapes
         old_conv1 = self.convnext.features[0][0]
@@ -383,9 +382,6 @@ class ConvNeXt(MetricNetwork):
             out_channels=old_conv1.out_channels,
             kernel_size=old_conv1.kernel_size,
             stride=old_conv1.stride,
-        )
-        self.convnext.classifier[2] = nn.Linear(
-            self.convnext.classifier[2].in_features, hyperparams[3]
         )
 
         # update return nodes (output hooks)
@@ -415,7 +411,7 @@ class ResNet(MetricNetwork):
         super().__init__(hyperparams)
 
         # import torchvision model
-        self.resnet = resnet18()
+        self.resnet = resnet18(num_classes=hyperparams[3])
 
         # replace first and last layer to match input and output shapes
         old_conv1 = self.resnet.conv1
@@ -427,7 +423,6 @@ class ResNet(MetricNetwork):
             padding=old_conv1.padding,
             bias=old_conv1.bias is not None,
         )
-        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, hyperparams[3])
 
         # update return nodes (output hooks)
         new_hooks = {}

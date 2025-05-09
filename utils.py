@@ -84,7 +84,10 @@ def get_args():
     parser.add_argument("-lr", "--learning-rate", default=LR, type=float)
     parser.add_argument("--loss", default="CrossEntropy", choices=["CrossEntropy"])
     parser.add_argument(
-        "-m", "--model", default="CNN", choices=["CIFARNet", "CNN", "ConvNeXt", "MLP", "ResNet"]
+        "-m",
+        "--model",
+        default="CNN",
+        choices=["CIFARNet", "CNN", "ConvNeXt", "MLP", "ResNet"],
     )
     parser.add_argument(
         "-nl",
@@ -225,8 +228,9 @@ class ComputeNC1(Callback):
 
     def on_validation_start(self, _trainer, network: MetricNetwork):
         """
-        Store and reset training metrics.
-        Necessary since validation called before train epoch end
+        Store training NC1 metrics and reset them before validation.
+        Necessary since validation is done before the end of each training epoch
+        (but after all training batches).
         """
         self.train_batch_activations = copy.deepcopy(network.batch_activations)
         self.train_layer_metrics = copy.deepcopy(self.layer_metrics)
@@ -262,12 +266,12 @@ class ComputeDIB(Callback):
 
     def on_fit_start(self, _trainer, network: MetricNetwork):
         """Create DIB networks for each block"""
-        for state in ("train", "val"):
+        for dataset in ("train", "val"):
             for block_idx in self.block_indices:
-                steps_per_epoch = len(getattr(self.dib_dm, f"{state}_dataloader")())
+                steps_per_epoch = len(getattr(self.dib_dm, f"{dataset}_dataloader")())
                 dib_net = DIBNetwork(
                     *network.get_encoder_decoder(block_idx),
-                    self.num_decoders[state],
+                    self.num_decoders[dataset],
                     network.optimiser,
                     network.learning_rate,
                     network.num_classes,
@@ -278,14 +282,10 @@ class ComputeDIB(Callback):
                     fullgraph=True,
                     options={"max_autotune": True},
                 )
-                self.dib_nets[state].append(dib_net)
+                self.dib_nets[dataset].append(dib_net)
 
     def _on_epoch_end(
-        self,
-        trainer: Trainer,
-        network: MetricNetwork,
-        state: Literal["train", "val"],
-        dataloader,
+        self, trainer: Trainer, network: MetricNetwork, dataset: Literal["train", "val"]
     ):
         """Train the DIB network and log the final training loss"""
 
@@ -296,8 +296,8 @@ class ComputeDIB(Callback):
         ):
             # update DIB network before training
             encoder, _ = network.get_encoder_decoder(block_idx)
-            self.dib_nets[state][i].update_encoder(encoder)
-            self.dib_nets[state][i].reset_decoders()
+            self.dib_nets[dataset][i].update_encoder(encoder)
+            self.dib_nets[dataset][i].reset_decoders()
 
             # train DIB network
             dib_trainer = Trainer(
@@ -308,13 +308,16 @@ class ComputeDIB(Callback):
                 benchmark=True,
                 # deterministic=True, # ignored when benchmark=True
             )
-            dib_trainer.fit(self.dib_nets[state][i], dataloader)
+            dib_trainer.fit(
+                self.dib_nets[dataset][i],
+                getattr(self.dib_dm, f"{dataset}_dataloader")(),
+            )
 
             # only log on process 0 since value is the same for all processes
             if network.global_rank == 0:
                 # log final training loss, i.e., decodable information
                 dib = dib_trainer.logged_metrics["train_loss"]
-                network.log(f"dib_{block_idx}_{state}", dib, rank_zero_only=True)
+                network.log(f"dib_{block_idx}_{dataset}", dib, rank_zero_only=True)
 
     def on_train_epoch_end(self, trainer: Trainer, network: MetricNetwork):
         self._on_epoch_end(trainer, network, "train", self.dib_dm.train_dataloader())

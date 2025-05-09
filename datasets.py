@@ -66,7 +66,9 @@ class DataModule(LightningDataModule):
         """Reshape data to be at least 4D with dimensions (N,C,H,W)"""
         data = torch.as_tensor(raw_data)
         size_4d = data.size() + (1,) * (4 - data.dim())
-        return data.reshape(size_4d).movedim(3, 1).float()
+        return (
+            data.reshape(size_4d).movedim(3, 1).float(memory_format=torch.channels_last)
+        )
 
     def setup(self, stage):
         """

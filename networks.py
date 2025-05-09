@@ -12,8 +12,13 @@ NL_TYPE = type[nn.ReLU | nn.Tanh]
 LOSS_TYPE = type[nn.CrossEntropyLoss]
 OPT_TYPE = type[optim.AdamW | optim.Adam | optim.SGD]
 HPARAM_TYPE = tuple[
-    LOSS_TYPE, OPT_TYPE, float, int, int
-]  # loss function, optimiser, learning rate, number of classes, total steps
+    LOSS_TYPE,  # loss function
+    OPT_TYPE,  # optimiser
+    float,  # learning rate
+    int,  # number of classes
+    int,  # total steps
+    bool,  # if the model should be compiled
+]
 
 
 class _Network(LightningModule):
@@ -29,6 +34,7 @@ class _Network(LightningModule):
         learning_rate: float,
         num_classes: int,
         total_steps: int,
+        no_compile: bool,
     ):
         super().__init__()
 
@@ -38,6 +44,14 @@ class _Network(LightningModule):
         self.learning_rate = learning_rate
         self.num_classes = num_classes
         self.total_steps = total_steps
+
+    def configure_model(self):
+        self = self.to(memory_format=torch.channels_last)
+        self.compile(
+            disable=self.hparams_initial["no_compile"],
+            fullgraph=True,
+            options={"max_autotune": True},
+        )
 
     def forward(self, x):
         raise NotImplementedError
@@ -87,10 +101,8 @@ class DIBNetwork(_Network):
         encoder: nn.Module,
         decoder: nn.Module,
         num_decoders: int,
-        optimiser: OPT_TYPE,
-        learning_rate: float,
-        num_classes: int,
         total_steps: int,
+        hyperparams: HPARAM_TYPE,
     ):
         """
         Create a network with multiple copies of `decoder` connected to a frozen copy of `encoder`.
@@ -104,11 +116,7 @@ class DIBNetwork(_Network):
         Before training, all decoders are reset.
         """
         super().__init__(
-            criterion=nn.CrossEntropyLoss,
-            optimiser=optimiser,
-            learning_rate=learning_rate,
-            num_classes=num_classes,
-            total_steps=total_steps,
+            nn.CrossEntropyLoss, *hyperparams[1:4], total_steps, hyperparams[-1]
         )
         # copy encoder to ensure correct device placement of parameters
         self.encoder = deepcopy(encoder).requires_grad_(False).eval()

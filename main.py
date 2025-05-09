@@ -45,6 +45,7 @@ hyperparams = (
     args.learning_rate,
     dm.num_classes,
     len(dm.train_dataloader()) * args.epochs,
+    not args.compile,
 )
 match args.model:
     case "MLP":
@@ -55,7 +56,6 @@ match args.model:
         model = getattr(networks, args.model)(dm.input_size, nonlinearity, hyperparams)
     case _:
         model = getattr(networks, args.model)(dm.input_size, hyperparams)
-model.compile(disable=not args.compile, fullgraph=True, options={"max_autotune": True})
 
 # create tuner
 dummy_trainer = Trainer(

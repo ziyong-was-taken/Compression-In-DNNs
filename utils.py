@@ -254,35 +254,29 @@ class ComputeDIB(Callback):
         dib_dm: DIBData,
         num_devices: int,
         block_indices: list[int],
-        no_compile: bool,
     ):
         self.num_decoders = {"train": num_decoders_train, "val": num_decoders_val}
         self.dib_epochs = dib_epochs
         self.dib_dm = dib_dm
         self.num_devices = num_devices
         self.block_indices = block_indices
-        self.no_compile = no_compile
-        self.dib_nets: dict[str, list[DIBNetwork]] = {"train": [], "val": []}
+        self.dib_nets: dict[str, list[DIBNetwork]] = {}
 
     def on_fit_start(self, _trainer, network: MetricNetwork):
         """Create DIB networks for each block"""
+        hyperparams = (network.criterion, network.optimiser, network.learning_rate, network.num_classes, network.total_steps, network.no_compile)
         for dataset in ("train", "val"):
-            for block_idx in self.block_indices:
-                steps_per_epoch = len(getattr(self.dib_dm, f"{dataset}_dataloader")())
-                dib_net = DIBNetwork(
+            steps_per_epoch = len(getattr(self.dib_dm, f"{dataset}_dataloader")())
+            total_steps = steps_per_epoch * self.dib_epochs
+            self.dib_nets[dataset] = [
+                DIBNetwork(
                     *network.get_encoder_decoder(block_idx),
                     self.num_decoders[dataset],
-                    network.optimiser,
-                    network.learning_rate,
-                    network.num_classes,
-                    steps_per_epoch * self.dib_epochs,
+                    total_steps,
+                    hyperparams,
                 )
-                dib_net.compile(
-                    disable=self.no_compile,
-                    fullgraph=True,
-                    options={"max_autotune": True},
-                )
-                self.dib_nets[dataset].append(dib_net)
+                for block_idx in self.block_indices
+            ]
 
     def _on_epoch_end(
         self, trainer: Trainer, network: MetricNetwork, dataset: Literal["train", "val"]

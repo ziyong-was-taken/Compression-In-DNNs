@@ -320,10 +320,8 @@ class ComputeDIB(Callback):
                 network.log(f"dib_{block_idx}_{dataset}", dib, rank_zero_only=True)
 
     def on_train_epoch_end(self, trainer: Trainer, network: MetricNetwork):
-        self._on_epoch_end(trainer, network, "train", self.dib_dm.train_dataloader())
-
-    def on_validation_epoch_end(self, trainer: Trainer, network: MetricNetwork):
-        self._on_epoch_end(trainer, network, "val", self.dib_dm.val_dataloader())
+        for dataset in ("train", "val"):
+            self._on_epoch_end(trainer, network, dataset)
 
     def on_fit_end(self, _trainer, _network):
         """Clear DIB networks and free memory"""

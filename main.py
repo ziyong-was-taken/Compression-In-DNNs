@@ -10,7 +10,7 @@ import datasets
 import networks
 from datasets import DATASET_TYPE, DataModule, DIBData
 from networks import LOSS_TYPE, NL_TYPE, OPT_TYPE, MetricNetwork
-from utils import ComputeDIB, ComputeNC1, base_expand, get_args
+from utils import ComputeDIB, ComputeNC1, get_args
 
 args = get_args()
 seed_everything(seed=args.seed)
@@ -27,21 +27,15 @@ criterion: LOSS_TYPE = getattr(nn, args.loss + "Loss")
 optimiser: OPT_TYPE = getattr(optim, args.optimiser)
 
 # setup main datamodule
-dm = DataModule(
-    dataset,
-    data_dir=args.data_dir,
-    batch_size=args.batch_size,
-    num_devices=args.num_devices,
-)
+data_params = (dataset, args.data_dir, args.batch_size, args.num_devices)
+dm = DataModule(*data_params)
+
+# compute dataset metrics (used to create model and DIB data)
 dm.prepare_data()
 dm.setup("fit")
 
-# setup DIB datamodule
-dib_train_labels = base_expand(dm.train_labels, dm.num_classes)
-dib_val_labels = base_expand(dm.val_labels, dm.num_classes)
-dib_dm = DIBData(dm, dib_train_labels, dib_val_labels)
-dib_dm.prepare_data()
-dib_dm.setup("fit")
+# create DIB datamodule
+dib_dm = DIBData(*data_params)
 
 # create model
 model: MetricNetwork

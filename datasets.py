@@ -1,6 +1,9 @@
+import math
+
 import torch
 from lightning import LightningDataModule
 from lightning.fabric.utilities import suggested_max_num_workers as max_num_workers
+from torch.nn.functional import one_hot
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision.datasets import CIFAR10, MNIST, FashionMNIST, VisionDataset
 from torchvision.transforms import v2
@@ -69,11 +72,8 @@ class DataModule(LightningDataModule):
     def setup(self, stage):
         """
         Setup the train and validation datasets.
-        When training, compute the
-        - input size,
-        - output size,
-        - class distribution/counts, and
-        - DIB labels.
+        Before training, compute the input size, number of classes,
+        and class distribution/counts for both datasets.
         """
         match stage:
             case "fit":
@@ -137,22 +137,37 @@ class DataModule(LightningDataModule):
 
 class DIBData(DataModule):
     def __init__(
-        self,
-        datamodule: DataModule,
-        train_dib_labels: torch.Tensor,
-        val_dib_labels: torch.Tensor,
+        self, dataset: DATASET_TYPE, data_dir: str, batch_size: int, num_devices: int
     ):
-        super().__init__(
-            datamodule.dataset,
-            datamodule.data_dir,
-            datamodule.batch_size,
-            datamodule.num_devices,
-        )
-        self.train_dib_labels = train_dib_labels
-        self.val_dib_labels = val_dib_labels
+        super().__init__(dataset, data_dir, batch_size, num_devices)
+
+    def _base_expand(
+        self, labels: torch.Tensor, class_counts: torch.Tensor, num_classes: int
+    ):
+        r"""
+        Generate relabeling `N` of the data where `N[i,:]` are the new labels of the `i`th sample.
+        Each sample obtains ⌈log_{|Y|}(max{|X_y| : y ∈ Y})⌉ new labels,
+        where {|X_y| : y ∈ Y} = {|{l ∈ `labels` : l = y}| : y ∈ Y} = `class_counts`
+        and Y = {0,…,`num_classes`-1}.
+        Based on Algorithm 1 of "Learning Optimal Representations with
+        the Decodable Information Bottleneck".
+        """
+        assert labels.dim() == 1, "labels must be 1D"
+        assert torch.max(labels) < num_classes, "labels ⊈ {0,…,num_classes-1}"
+
+        # compute ⌈log_{|Y|}(max{|X_y| : y ∈ Y})⌉
+        num_digits = math.ceil(math.log(class_counts.max(), num_classes))
+
+        # enumerate samples of the same class
+        cum_counts = one_hot(labels, num_classes).cumsum(0)
+        idcs = cum_counts[torch.arange(labels.size(0)), labels] - 1
+
+        # base |Y| representation of indices padded with 0s to num_digits digits
+        divisors = torch.tensor([num_classes**i for i in range(num_digits - 1, -1, -1)])
+        temp = idcs.unsqueeze(1).expand(-1, num_digits)
+        return (temp // divisors) % num_classes
 
     def setup(self, stage):
-        """Create the train dataset with new labels."""
         match stage:
             case "fit":
                 # use test set for validation (okay since no model selection is done)
@@ -160,9 +175,16 @@ class DIBData(DataModule):
                     self.dataset(self.data_dir, train=train, transform=self.transform)
                     for train in (True, False)
                 ]
+
+                # create DIB datasets
+                train_dib_labels, val_dib_labels = (
+                    self._base_expand(labels, class_counts, self.num_classes)
+                    for labels, class_counts in zip(
+                        (self.train_labels, self.val_labels),
+                        (self.train_class_counts, self.val_class_counts),
+                    )
+                )
                 self.train = TensorDataset(
-                    self._preprocess(train_ds.data), self.train_dib_labels
+                    self._preprocess(train_ds.data), train_dib_labels
                 )
-                self.val = TensorDataset(
-                    self._preprocess(val_ds.data), self.val_dib_labels
-                )
+                self.val = TensorDataset(self._preprocess(val_ds.data), val_dib_labels)

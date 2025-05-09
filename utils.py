@@ -1,6 +1,5 @@
 import argparse
 import copy
-import math
 from typing import Literal
 
 import torch
@@ -119,34 +118,6 @@ def get_args():
         metavar="WIDTH",
     )
     return parser.parse_args()
-
-
-def base_expand(labels: torch.Tensor, num_classes: int):
-    r"""
-    Generate random relabeling `N` of the data where `N[i,:]` are
-    the new labels of the `i`th sample.
-    Each sample obtains ⌈log_`num_classes`(max{|X_y| : y ∈ Y})⌉ new labels,
-    where X_y = {l ∈ `labels` : l = y} and Y = {0,…,`num_classes`-1}.
-    Based on Algorithm 1 of "Learning Optimal Representations with
-    the Decodable Information Bottleneck".
-    """
-    assert labels.dim() == 1, "labels must be 1D"
-    assert torch.max(labels) < num_classes, "labels ⊈ {0,…,num_classes}"
-
-    # compute ⌈log_{|Y|}(max{|X_y| : y ∈ Y})⌉
-    num_digits = math.ceil(math.log(labels.bincount().max(), num_classes))
-
-    # enumerate samples of the same class
-    idcs = torch.zeros_like(labels)
-    for y in range(num_classes):
-        mask = labels == y
-        if (count := mask.sum()) > 0:
-            idcs[mask] = torch.arange(0, count)
-
-    # base |Y| representation of indices padded with 0s to num_digits digits
-    divisors = torch.tensor([num_classes**i for i in range(num_digits - 1, -1, -1)])
-    temp = idcs.unsqueeze(1).expand(-1, num_digits)
-    return (temp // divisors) % num_classes
 
 
 class ComputeNC1(Callback):

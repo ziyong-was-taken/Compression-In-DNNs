@@ -247,8 +247,8 @@ class ComputeDIB(Callback):
 
     def __init__(
         self,
-        dib_epochs: int,
         dib_dm: DIBData,
+        dib_epochs: int,
         num_devices: int,
         *block_indices: int,
     ):

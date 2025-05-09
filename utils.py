@@ -1,6 +1,5 @@
 import argparse
-import copy
-from typing import Literal
+from copy import deepcopy
 
 import torch
 from lightning import Callback, Trainer
@@ -232,8 +231,8 @@ class ComputeNC1(Callback):
         Necessary since validation is done before the end of each training epoch
         (but after all training batches).
         """
-        self.train_batch_activations = copy.deepcopy(network.batch_activations)
-        self.train_layer_metrics = copy.deepcopy(self.layer_metrics)
+        self.train_batch_activations = deepcopy(network.batch_activations)
+        self.train_layer_metrics = deepcopy(self.layer_metrics)
         network.batch_activations.clear()
         self.layer_metrics.clear()
 

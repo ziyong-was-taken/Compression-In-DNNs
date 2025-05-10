@@ -252,10 +252,6 @@ class ComputeDIB(Callback):
         num_devices: int,
         *block_indices: int,
     ):
-        self.num_decoders = {
-            dataset: getattr(dib_dm, f"{dataset}_dib_labels").size(1)
-            for dataset in ("train", "val")
-        }
         self.dib_epochs = dib_epochs
         self.dib_dm = dib_dm
         self.num_devices = num_devices
@@ -277,7 +273,7 @@ class ComputeDIB(Callback):
             self.dib_nets[dataset] = [
                 DIBNetwork(
                     *network.get_encoder_decoder(block_idx),
-                    self.num_decoders[dataset],
+                    getattr(self.dib_dm, f"{dataset}_dib_labels").size(1),
                     total_steps,
                     hyperparams,
                 )

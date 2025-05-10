@@ -178,7 +178,7 @@ class DIBData(DataModule):
                 ]
 
                 # create DIB datasets
-                train_dib_labels, val_dib_labels = (
+                self.train_dib_labels, self.val_dib_labels = (
                     self._base_expand(labels, class_counts, self.num_classes)
                     for labels, class_counts in zip(
                         (self.train_labels, self.val_labels),
@@ -186,6 +186,8 @@ class DIBData(DataModule):
                     )
                 )
                 self.train = TensorDataset(
-                    self._preprocess(train_ds.data), train_dib_labels
+                    self._preprocess(train_ds.data), self.train_dib_labels
                 )
-                self.val = TensorDataset(self._preprocess(val_ds.data), val_dib_labels)
+                self.val = TensorDataset(
+                    self._preprocess(val_ds.data), self.val_dib_labels
+                )

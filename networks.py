@@ -44,7 +44,7 @@ class _Network(LightningModule):
         self.compile(
             disable=self.hparams_initial["no_compile"],
             fullgraph=True,
-            options={"max_autotune": True},
+            mode="max-autotune",
         )
 
     def forward(self, x):

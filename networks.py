@@ -64,7 +64,7 @@ class _Network(LightningModule):
                 num_classes=self.hparams_initial["num_classes"],
             )
             self.log("train_acc", acc, sync_dist=True)
-            self.log("lr", self.lr_schedulers().get_last_lr()[0])
+            # self.log("lr", self.lr_schedulers().get_last_lr()[0])
 
         return loss
 
@@ -76,6 +76,7 @@ class _Network(LightningModule):
         optimiser = self.hparams_initial["optimiser"](
             self._opt_parameters(), lr=self.hparams_initial["learning_rate"], fused=True
         )
+        return optimiser
         lr_scheduler = OneCycleLR(
             optimiser,
             max_lr=self.hparams_initial["learning_rate"],
@@ -235,7 +236,24 @@ class MLP(MetricNetwork):
         return encoder, decoder
 
 
-class CNN(MetricNetwork):
+class ConvPoolActivation(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        nonlinearity: NL_TYPE,
+    ):
+        super().__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size)
+        self.pool = nn.MaxPool2d(2)
+        self.nl = nonlinearity()
+
+    def forward(self, x):
+        return self.nl(self.pool(self.conv(x)))
+
+
+class MNISTNet(MetricNetwork):
     """
     Tuomas Oikarinen's performance-focussed (both in speed and accuracy) CNN.
     https://github.com/tuomaso/train_mnist_fast
@@ -253,18 +271,10 @@ class CNN(MetricNetwork):
             f"Number of channels ({len(channels)}) ≠ number of kernels ({len(kernels)}) + 1"
         )
         self.blocks = nn.Sequential(
-            *[
-                nn.Sequential(
-                    OrderedDict(
-                        {
-                            "conv": nn.Conv2d(*conv_params),
-                            "pool": nn.MaxPool2d(2),
-                            "nl": nonlinearity(),
-                        }
-                    )
-                )
-                for conv_params in zip(channels[:-1], channels[1:], kernels)
-            ]
+            *(
+                ConvPoolActivation(*in_out_kernel, nonlinearity)
+                for in_out_kernel in zip(channels[:-1], channels[1:], kernels)
+            )
         )
 
         def conv_final_ndim():
@@ -305,9 +315,46 @@ class CNN(MetricNetwork):
         return encoder, decoder
 
 
+class Block(nn.Module):
+    def __init__(
+        self, in_channels: int, out_channels: int, nonlinearity: NL_TYPE
+    ) -> None:
+        super().__init__()
+        self.conv = nn.Conv2d(
+            in_channels, out_channels, kernel_size=3, padding="same", bias=False
+        )
+        self.pool = nn.MaxPool2d(2)
+        self.bn = nn.BatchNorm2d(out_channels, track_running_stats=False)
+        self.nl = nonlinearity()
+        self.conv2 = nn.Conv2d(
+            out_channels, out_channels, kernel_size=3, padding="same", bias=False
+        )
+        self.bn2 = nn.BatchNorm2d(out_channels, track_running_stats=False)
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = self.pool(x)
+        x = self.bn(x)
+        start = self.nl(x)
+        x = self.conv2(start)
+        x = self.bn2(x)
+        x = self.nl(x) + start
+        return x
+
+
+class MaxPoolFC(nn.Module):
+    def __init__(self, in_features: int, out_features: int) -> None:
+        super().__init__()
+        self.fc = nn.Linear(in_features, out_features)
+
+    def forward(self, x: torch.Tensor):
+        x = x.amax((-2, -1))  # global max pooling (N, C, H, W) -> (N, C)
+        return self.fc(x)
+
+
 class CIFARNet(MetricNetwork):
     """
-    The current 94% CIFAR-10 speedrun world record holder by Keller Jordan.
+    Based on the current 94% CIFAR-10 speedrun world record holder by Keller Jordan.
     https://github.com/KellerJordan/cifar10-airbench
     """
 
@@ -316,60 +363,28 @@ class CIFARNet(MetricNetwork):
     ):
         super().__init__(hyperparams)
 
-        channels = (24, 64, 256, 256)
-        # TODO: what to do with whitening?
-        self.whiten = nn.Sequential(
-            nn.Conv2d(in_shape[0], channels[0], 2), nonlinearity()
-        )
+        channels = (in_shape[0], 64, 128, 256)
         self.blocks = nn.Sequential(
             *[
-                nn.Sequential(
-                    OrderedDict(
-                        {
-                            "conv1": nn.Conv2d(
-                                in_channels, out_channels, 3, padding="same", bias=False
-                            ),
-                            "pool": nn.MaxPool2d(2),
-                            "norm1": nn.BatchNorm2d(out_channels, affine=False),
-                            "nl1": nonlinearity(),
-                            "conv2": nn.Conv2d(
-                                out_channels,
-                                out_channels,
-                                3,
-                                padding="same",
-                                bias=False,
-                            ),
-                            "norm2": nn.BatchNorm2d(out_channels, affine=False),
-                            "nl2": nonlinearity(),
-                        }
-                    )
-                )
+                Block(in_channels, out_channels, nonlinearity)
                 for in_channels, out_channels in zip(channels[:-1], channels[1:])
             ]
         )
-        self.head = nn.Sequential(
-            OrderedDict(
-                {
-                    "pool": nn.MaxPool2d(3),
-                    "flatten": nn.Flatten(),
-                    "fc": nn.Linear(channels[-1], hyperparams[3], bias=False),
-                }
-            )
-        )
+        self.head = MaxPoolFC(channels[-1], hyperparams[3])
 
         # update return nodes (output hooks)
         self._register_hooks(
-            {f"nc_layer_{i}": block.nl2 for i, block in enumerate(self.blocks)}
+            {f"nc_layer_{i}": block.nl for i, block in enumerate(self.blocks)}
             | {"nc_output": self.head.fc}
         )
         self.num_blocks = len(self.blocks)
 
-    def forward(self, x):
-        return self.head(self.blocks(self.whiten(x)))
+    def forward(self, x: torch.Tensor):
+        return self.head(self.blocks(x))
 
     def get_encoder_decoder(self, encoder_blocks):
         super()._check_encoder_blocks(encoder_blocks)
-        encoder = nn.Sequential(self.whiten, *self.blocks[:encoder_blocks])
+        encoder = nn.Sequential(*self.blocks[:encoder_blocks])
         decoder = nn.Sequential(*self.blocks[encoder_blocks:], self.head)
         return encoder, decoder
 

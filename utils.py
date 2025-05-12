@@ -52,7 +52,7 @@ def get_args():
     -lr,  --learning-rate: learning rate for the optimiser
           --loss: loss function to use
     -m,   --model: model to use
-    -nl,  --nonlinearity: nonlinearity used in hidden layers of MLP, CNN
+    -nl,  --nonlinearity: nonlinearity used in hidden layers of MLP, MNISTNet
           --num-devices: number of devices used to train the DIB network
     -opt, --optimiser: optimiser to use
           --seed: seed for random number generation
@@ -85,15 +85,15 @@ def get_args():
     parser.add_argument(
         "-m",
         "--model",
-        default="CNN",
-        choices=["CIFARNet", "CNN", "ConvNeXt", "MLP", "ResNet"],
+        default="MNISTNet",
+        choices=["CIFARNet", "ConvNeXt", "MLP", "MNISTNet", "ResNet"],
     )
     parser.add_argument(
         "-nl",
         "--nonlinearity",
         default="ReLU",
         help=(
-            "nonlinearity used in hidden layers of MLP and CNN, "
+            "nonlinearity used in hidden layers of MLP, MNISTNet, and CIFARNet, "
             "has no effect on ConvNeXt and ResNet (yet)"
         ),
     )

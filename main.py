@@ -70,7 +70,7 @@ with trainer.init_module():
             model = networks.MLP(
                 [dm.input_size.numel()] + args.widths, nonlinearity, hyperparams
             )
-        case "CNN" | "CIFARNet":
+        case "MNISTNet" | "CIFARNet":
             model = getattr(networks, args.model)(
                 dm.input_size, nonlinearity, hyperparams
             )

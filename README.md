@@ -142,8 +142,8 @@ The new sample labels are then [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] and [0, 1, 2
 - goal: each epoch, compute $\operatorname{tr}(Σ_W^l Σ_B^{l+})$ for all layers $l ∈ ℒ$
 - the activations $\{𝐡ˡ_{c,i}\}_{l∈ℒ,\ c ∈ \{1,…,C\},\ i ∈ \{1,…,N\}}$ are accessed by registering forward hooks at the final layer as well as:
   - MLP: after each nonlinearity
-  - CNN: after each convolutional block
-  - ConvNeXt-T, ResNet-18: after each residual block
+  - MNISTNet: after each convolutional block
+  - CIFARNet, ConvNeXt-T, ResNet-18: after each residual block
   - these hooks store the output of each hooked layer after each forward pass
 - Since the activations don't fit in memory all at once, only the batch activations $\{𝐡ˡ_{c,i}\}_{l ∈ ℒ,\ c ∈ \{1,…,C\},\ i ∈ \{b_1,…,b_S\}}$ can be used where $b_n$ is element $n$ of batch $b$ and $S$ is the batch size.
 - the algorithm

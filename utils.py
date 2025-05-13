@@ -85,7 +85,7 @@ def get_args():
     parser.add_argument(
         "-m",
         "--model",
-        default="MNISTNet",
+        default="CIFARNet",
         choices=["CIFARNet", "ConvNeXt", "MLP", "MNISTNet", "ResNet"],
     )
     parser.add_argument(
@@ -265,6 +265,10 @@ class ComputeDIB(Callback):
         if not self.block_indices :
             self.block_indices = list(range(network.num_blocks + 1))
 
+        # compute DIB data metrics
+        self.dib_dm.prepare_data()
+        self.dib_dm.setup("fit")
+
         # create DIB networks for each block for both datasets
         hyperparams = tuple(network.hparams_initial.values())
         for dataset in ("train", "val"):
@@ -299,6 +303,7 @@ class ComputeDIB(Callback):
                 # train DIB network
                 dib_trainer = Trainer(
                     devices=self.num_devices,
+                    precision="bf16-mixed",
                     max_epochs=self.dib_epochs,
                     logger=False,  # don't write (but do store) training losses
                     default_root_dir="lightning_logs",

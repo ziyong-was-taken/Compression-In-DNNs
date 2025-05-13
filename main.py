@@ -39,6 +39,7 @@ dm.setup("fit")
 logger = CSVLogger(os.getcwd())
 trainer = Trainer(
     devices=args.num_devices,
+    precision="bf16-mixed",
     max_epochs=args.epochs,
     logger=logger,
     log_every_n_steps=25,

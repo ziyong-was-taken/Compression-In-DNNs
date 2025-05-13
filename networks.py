@@ -321,24 +321,23 @@ class Block(nn.Module):
     ) -> None:
         super().__init__()
         self.conv = nn.Conv2d(
+            in_channels, in_channels, kernel_size=3, padding="same", bias=False
+        )
+        self.bn = nn.BatchNorm2d(in_channels, track_running_stats=False)
+        self.conv2 = nn.Conv2d(
             in_channels, out_channels, kernel_size=3, padding="same", bias=False
         )
-        self.pool = nn.MaxPool2d(2)
-        self.bn = nn.BatchNorm2d(out_channels, track_running_stats=False)
-        self.nl = nonlinearity()
-        self.conv2 = nn.Conv2d(
-            out_channels, out_channels, kernel_size=3, padding="same", bias=False
-        )
         self.bn2 = nn.BatchNorm2d(out_channels, track_running_stats=False)
+        self.pool = nn.MaxPool2d(2)
+        self.nl = nonlinearity()
 
     def forward(self, x):
-        x = self.conv(x)
-        x = self.pool(x)
-        x = self.bn(x)
-        start = self.nl(x)
-        x = self.conv2(start)
-        x = self.bn2(x)
-        x = self.nl(x) + start
+        # skip connection
+        x = x + self.bn(self.conv(x))
+        x = self.nl(x)
+
+        # downscale
+        x = self.nl(self.pool(self.bn2(self.conv2(x))))
         return x
 
 
@@ -365,16 +364,16 @@ class CIFARNet(MetricNetwork):
 
         channels = (in_shape[0], 64, 128, 256)
         self.blocks = nn.Sequential(
-            *[
+            *(
                 Block(in_channels, out_channels, nonlinearity)
                 for in_channels, out_channels in zip(channels[:-1], channels[1:])
-            ]
+            )
         )
         self.head = MaxPoolFC(channels[-1], hyperparams[3])
 
         # update return nodes (output hooks)
         self._register_hooks(
-            {f"nc_layer_{i}": block.nl for i, block in enumerate(self.blocks)}
+            {f"nc_layer_{i}": block for i, block in enumerate(self.blocks)}
             | {"nc_output": self.head.fc}
         )
         self.num_blocks = len(self.blocks)

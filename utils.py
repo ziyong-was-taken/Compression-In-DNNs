@@ -132,34 +132,28 @@ class ComputeNC1(Callback):
         num_classes: int,
     ):
         """
-        Store metrics for each layer as dict `layer_metrics`.
-        Let zˡ be the size of the flattened activations of layer l and
-        C the number of classes, then
-
-        - `size(layer_metrics[l]) == (C + zˡ, zˡ)`
-        - `layer_metrics[l][:C]` are the per-class activation sums
-        - `layer_metrics[l][C:]` is the gram matrix
+        Store per-class activation sums for each layer as dict `all_class_sums`.
+        `all_class_sums[l]` is of size (C, zˡ) where C is the number of classes and
+        zˡ is the size of the flattened activations of layer l.
         """
         self.train_class_counts = train_class_counts
         self.val_class_counts = val_class_counts
         self.num_classes = num_classes
-        self.layer_metrics: dict[str, torch.Tensor] = {}
+        self.all_class_sums: dict[str, torch.Tensor] = {}
 
     @torch.inference_mode()
     def _on_batch_end(self, network: MetricNetwork, batch: list[torch.Tensor]):
         """Update NC metrics after each batch"""
         _, targets = batch
         for layer, activations in network.batch_activations.items():
-            activations = activations.flatten(start_dim=1)
-            if layer not in self.layer_metrics:
-                act_size = activations.size(1)
-                self.layer_metrics[layer] = torch.zeros(
-                    (self.num_classes + act_size, act_size), device=network.device
+            if layer not in self.all_class_sums:
+                self.all_class_sums[layer] = activations.new_zeros(
+                    (self.num_classes, activations.size(1))
                 )
-            self.layer_metrics[layer][: self.num_classes].index_add_(
+            self.all_class_sums[layer].index_add_(
                 dim=0, index=targets, source=activations
             )
-            self.layer_metrics[layer][self.num_classes :] += activations.T @ activations
+        network.batch_activations.clear()
 
     def on_train_batch_end(
         self,
@@ -183,47 +177,86 @@ class ComputeNC1(Callback):
 
     @torch.inference_mode()
     def _on_epoch_end(
-        self, network: MetricNetwork, state: str, class_counts: torch.Tensor
+        self,
+        network: MetricNetwork,
+        state: str,
+        class_counts: torch.Tensor,
+        dataloader,
     ):
         """Aggregate batched NC metrics and log them"""
 
-        # TODO: come up with smarter way to load-balance
-        # synchronise metrics to process 0
+        # synchronise metrics
         if torch.distributed.is_available() and torch.distributed.is_initialized():
-            for joint_metric in self.layer_metrics.values():
-                torch.distributed.reduce(joint_metric, dst=0)
+            for class_sums in self.all_class_sums.values():
+                torch.distributed.all_reduce(class_sums)
+        class_counts = class_counts.to(network.device)
 
-        # only compute and log nc on process 0
+        class_means: dict[str, torch.Tensor] = {}
+        centred_means: dict[str, torch.Tensor] = {}
+        rev_between_covs = []
+
+        # compute means and reversed covariances
+        total_count = class_counts.sum()
+        for i, (layer, class_sums) in enumerate(self.all_class_sums.items()):
+            class_means[layer] = class_sums / class_counts.unsqueeze(
+                dim=1
+            )  # [𝛍_1^l ⋯ 𝛍_C^l]^⊤: (C, zˡ)
+            global_mean = class_sums.sum(dim=0) / total_count  # ̄𝛍ˡ: (zˡ)
+            centred_means[layer] = class_means[layer] - global_mean  # (𝐌ˡ)^⊤: (C, zˡ)
+            rev_between_covs.append(
+                centred_means[layer] @ centred_means[layer].T
+            )  # (𝐌ˡ)^⊤ 𝐌ˡ: (C, C), recall: Σ_B^l = 1/C 𝐌ˡ(𝐌ˡ)^⊤
+
+        # compute eigendecomposition of (𝐌ˡ)^⊤(𝐌ˡ)
+        eigvals, rev_eigvecs = torch.linalg.eigh(
+            torch.stack(rev_between_covs, dim=0)
+        )  # (n_layers, C), (n_layers, C, C)
+
+        # second pass
+        nc = {f"{layer}_{state}": 0 for layer in self.all_class_sums.keys()}
+        for batch in dataloader:
+            inputs, targets = network.transfer_batch_to_device(batch, network.device, 0)
+
+            # compute activations
+            with torch.autocast(device_type=network.device.type, dtype=network.dtype):
+                network(inputs)
+
+            # aggregate second pass
+            for i, (layer, activations) in enumerate(network.batch_activations.items()):
+                matrix_prod = (
+                    (activations - class_means[layer][targets]) @ centred_means[layer].T
+                ) @ rev_eigvecs[i]  # (𝐡_c^l - 𝛍_c^l)^⊤ 𝐌ˡ 𝐕: (batch, C)
+
+                # filter out eigenvalues close to zero for stability
+                mask = eigvals[i] > 1e-5 * eigvals[i].max()
+                nc[f"{layer}_{state}"] += (
+                    (matrix_prod[:, mask] / eigvals[i, mask]) ** 2
+                ).sum()
+
+        # synchronise metrics again
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            for nc_value in nc.values():
+                torch.distributed.all_reduce(nc_value)
+
+        # final factor
+        nc = {key: value * self.num_classes / total_count for key, value in nc.items()}
+
+        # only log on process 0 since value is the same for all processes
         if network.global_rank == 0:
-            nc: dict[str, torch.Tensor] = {}
-            class_counts = class_counts.to(network.device)
-            total_count = class_counts.sum()
-            for layer, joint_metric in self.layer_metrics.items():
-                class_sums = joint_metric[: self.num_classes]
-                class_means = class_sums / class_counts.unsqueeze(dim=1)
-                global_mean = class_sums.sum(dim=0) / total_count
-                centred_means = class_means - global_mean
-                between_cov = (centred_means.T @ centred_means) / self.num_classes
-                within_cov = (
-                    joint_metric[self.num_classes :] / total_count
-                    - torch.outer(global_mean, global_mean)
-                    - between_cov
-                )
-                nc[f"{layer}_{state}"] = torch.linalg.lstsq(
-                    between_cov.cpu(),  # gelsd only supported on CPU
-                    within_cov.cpu(),  # gelsd only supported on CPU
-                    driver="gelsd",
-                ).solution.trace()
             network.log_dict(nc, rank_zero_only=True)
 
         # reset NC metrics for next epoch
-        self.layer_metrics.clear()
+        self.all_class_sums.clear()
 
-    def on_train_epoch_end(self, _trainer, network: MetricNetwork):
-        self._on_epoch_end(network, "train", self.train_class_counts)
+    def on_train_epoch_end(self, trainer: Trainer, network: MetricNetwork):
+        self._on_epoch_end(
+            network, "train", self.train_class_counts, trainer.train_dataloader
+        )
 
-    def on_validation_epoch_end(self, _trainer, network: MetricNetwork):
-        self._on_epoch_end(network, "val", self.val_class_counts)
+    def on_validation_epoch_end(self, trainer: Trainer, network: MetricNetwork):
+        self._on_epoch_end(
+            network, "val", self.val_class_counts, trainer.val_dataloaders
+        )
 
     def on_validation_start(self, _trainer, network: MetricNetwork):
         """
@@ -231,15 +264,12 @@ class ComputeNC1(Callback):
         Necessary since validation is done before the end of each training epoch
         (but after all training batches).
         """
-        self.train_batch_activations = deepcopy(network.batch_activations)
-        self.train_layer_metrics = deepcopy(self.layer_metrics)
-        network.batch_activations.clear()
-        self.layer_metrics.clear()
+        self.train_class_sums = deepcopy(self.all_class_sums)
+        self.all_class_sums.clear()
 
     def on_validation_end(self, _trainer, network: MetricNetwork):
         """Restore training metrics"""
-        network.batch_activations = self.train_batch_activations
-        self.layer_metrics = self.train_layer_metrics
+        self.all_class_sums = self.train_class_sums
 
 
 class ComputeDIB(Callback):
@@ -252,8 +282,12 @@ class ComputeDIB(Callback):
         num_devices: int,
         *block_indices: int,
     ):
-        self.dib_epochs = dib_epochs
+        # compute DIB data metrics
         self.dib_dm = dib_dm
+        self.dib_dm.prepare_data()
+        self.dib_dm.setup("fit")
+
+        self.dib_epochs = dib_epochs
         self.num_devices = num_devices
         self.block_indices = block_indices
         self.dib_nets: dict[str, list[DIBNetwork]] = {}
@@ -262,12 +296,8 @@ class ComputeDIB(Callback):
         """Create DIB networks for each block"""
 
         # default to all blocks if no block indices were given
-        if not self.block_indices :
+        if not self.block_indices:
             self.block_indices = list(range(network.num_blocks + 1))
-
-        # compute DIB data metrics
-        self.dib_dm.prepare_data()
-        self.dib_dm.setup("fit")
 
         # create DIB networks for each block for both datasets
         hyperparams = tuple(network.hparams_initial.values())
@@ -277,7 +307,7 @@ class ComputeDIB(Callback):
             self.dib_nets[dataset] = [
                 DIBNetwork(
                     *network.get_encoder_decoder(block_idx),
-                    getattr(self.dib_dm, f"{dataset}_dib_labels").size(1),
+                    self.dib_dm.num_decoders[dataset],
                     total_steps,
                     hyperparams,
                 )
@@ -303,7 +333,7 @@ class ComputeDIB(Callback):
                 # train DIB network
                 dib_trainer = Trainer(
                     devices=self.num_devices,
-                    precision="bf16-mixed",
+                    precision="bf16-true",
                     max_epochs=self.dib_epochs,
                     logger=False,  # don't write (but do store) training losses
                     default_root_dir="lightning_logs",

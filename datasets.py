@@ -52,7 +52,7 @@ class DataModule(LightningDataModule):
         self.batch_size = batch_size
         self.num_devices = num_devices
         self.transform = v2.Compose(
-            [  # TODO: image augmentation and/or normalisation
+            [
                 v2.ToImage(),  # convert to TVTensor Image
                 v2.ToDtype(torch.float, scale=True),  # uint8 {0,…,255} to float32 [0,1]
             ]
@@ -137,14 +137,18 @@ class DataModule(LightningDataModule):
 
 
 class DIBData(DataModule):
-    def __init__(
-        self, dataset: DATASET_TYPE, data_dir: str, batch_size: int, num_devices: int
-    ):
-        super().__init__(dataset, data_dir, batch_size, num_devices)
+    def __init__(self, dm: DataModule):
+        super().__init__(dm.dataset, dm.data_dir, dm.batch_size, dm.num_devices)
+        self.labels = {"train": dm.train_labels, "val": dm.val_labels}
+        self.class_counts = {"train": dm.train_class_counts, "val": dm.val_class_counts}
+        self.num_classes = dm.num_classes
+        self.num_decoders = {
+            # ⌈log_{|Y|}(max{|X_y| : y ∈ Y})⌉ new labels per sample
+            dataset: math.ceil(math.log(class_counts.max(), self.num_classes))
+            for dataset, class_counts in self.class_counts.items()
+        }
 
-    def _base_expand(
-        self, labels: torch.Tensor, class_counts: torch.Tensor, num_classes: int
-    ):
+    def _base_expand(self, labels: torch.Tensor, num_decoders: int):
         r"""
         Generate relabeling `N` of the data where `N[i,:]` are the new labels of the `i`th sample.
         Each sample obtains ⌈log_{|Y|}(max{|X_y| : y ∈ Y})⌉ new labels,
@@ -154,19 +158,18 @@ class DIBData(DataModule):
         the Decodable Information Bottleneck".
         """
         assert labels.dim() == 1, "labels must be 1D"
-        assert torch.max(labels) < num_classes, "labels ⊈ {0,…,num_classes-1}"
-
-        # compute ⌈log_{|Y|}(max{|X_y| : y ∈ Y})⌉
-        num_digits = math.ceil(math.log(class_counts.max(), num_classes))
+        assert torch.max(labels) < self.num_classes, "labels ⊈ {0,…,num_classes-1}"
 
         # enumerate samples of the same class
-        cum_counts = one_hot(labels, num_classes).cumsum(0)
+        cum_counts = one_hot(labels, self.num_classes).cumsum(0)
         idcs = cum_counts[torch.arange(labels.size(0)), labels] - 1
 
-        # base |Y| representation of indices padded with 0s to num_digits digits
-        divisors = torch.tensor([num_classes**i for i in range(num_digits - 1, -1, -1)])
-        temp = idcs.unsqueeze(1).expand(-1, num_digits)
-        return (temp // divisors) % num_classes
+        # base |Y| representation of indices padded with 0s to num_decoders digits
+        divisors = torch.tensor(
+            [self.num_classes**i for i in range(num_decoders - 1, -1, -1)]
+        )
+        temp = idcs.unsqueeze(1).expand(-1, num_decoders)
+        return (temp // divisors) % self.num_classes
 
     def setup(self, stage):
         match stage:
@@ -178,16 +181,11 @@ class DIBData(DataModule):
                 ]
 
                 # create DIB datasets
-                self.train_dib_labels, self.val_dib_labels = (
-                    self._base_expand(labels, class_counts, self.num_classes)
-                    for labels, class_counts in zip(
-                        (self.train_labels, self.val_labels),
-                        (self.train_class_counts, self.val_class_counts),
-                    )
+                train_dib_labels, val_dib_labels = (
+                    self._base_expand(self.labels[dataset], self.num_decoders[dataset])
+                    for dataset in ("train", "val")
                 )
                 self.train = TensorDataset(
-                    self._preprocess(train_ds.data), self.train_dib_labels
+                    self._preprocess(train_ds.data), train_dib_labels
                 )
-                self.val = TensorDataset(
-                    self._preprocess(val_ds.data), self.val_dib_labels
-                )
+                self.val = TensorDataset(self._preprocess(val_ds.data), val_dib_labels)

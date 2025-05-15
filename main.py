@@ -26,12 +26,8 @@ nonlinearity: NL_TYPE = getattr(nn, args.nonlinearity)
 criterion: LOSS_TYPE = getattr(nn, args.loss + "Loss")
 optimiser: OPT_TYPE = getattr(optim, args.optimiser)
 
-# setup datamodules
-data_params = (dataset, args.data_dir, args.batch_size, args.num_devices)
-dm = DataModule(*data_params)
-dib_dm = DIBData(*data_params)
-
-# compute metrics of main dataset
+# setup and compute metrics of dataset
+dm = DataModule(dataset, args.data_dir, args.batch_size, args.num_devices)
 dm.prepare_data()
 dm.setup("fit")
 
@@ -39,7 +35,7 @@ dm.setup("fit")
 logger = CSVLogger(os.getcwd())
 trainer = Trainer(
     devices=args.num_devices,
-    precision="bf16-mixed",
+    precision="bf16-true",
     max_epochs=args.epochs,
     logger=logger,
     log_every_n_steps=25,
@@ -48,7 +44,7 @@ trainer = Trainer(
     num_sanity_val_steps=0,
     callbacks=[
         ComputeDIB(
-            dib_dm=dib_dm, dib_epochs=args.dib_epochs, num_devices=args.num_devices
+            dib_dm=DIBData(dm), dib_epochs=args.dib_epochs, num_devices=args.num_devices
         ),
         ComputeNC1(dm.train_class_counts, dm.val_class_counts, dm.num_classes),
     ],

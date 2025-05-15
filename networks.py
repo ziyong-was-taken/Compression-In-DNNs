@@ -35,9 +35,10 @@ class _Network(LightningModule):
         num_classes: int,
         total_steps: int,
         no_compile: bool,
+        ignore: list[str] = [],  # ignored hyperparameters
     ):
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=ignore)
 
     def configure_model(self):
         self = self.to(memory_format=torch.channels_last)
@@ -113,7 +114,11 @@ class DIBNetwork(_Network):
         Before training, all decoders are reset.
         """
         super().__init__(
-            nn.CrossEntropyLoss, *hyperparams[1:4], total_steps, hyperparams[-1]
+            nn.CrossEntropyLoss,
+            *hyperparams[1:4],
+            total_steps,
+            hyperparams[-1],
+            ["encoder", "decoder"],
         )
         # copy encoder to ensure correct device placement of parameters
         self.encoder = deepcopy(encoder).requires_grad_(False).eval()
@@ -163,8 +168,10 @@ class MetricNetwork(_Network):
 
         # get_hook: layer_name -> (hook: module, args, output -> None)
         def get_hook(name):
-            def hook(_module, _args, output):
-                self.batch_activations[name] = output.detach()
+            def hook(_module, _args, output: torch.Tensor):
+                self.batch_activations[name] = (
+                    output.detach().flatten(start_dim=1).to(torch.float)
+                )
 
             return hook
 
@@ -221,8 +228,8 @@ class MLP(MetricNetwork):
 
         # update return nodes (output hooks)
         self._register_hooks(
-            {f"nc_layer_{i}": block.nl for i, block in enumerate(self.blocks)}
-            | {"nc_output": self.fc}
+            {f"nc_layer_{i}": block for i, block in enumerate(self.blocks[:-1])}
+            | {"nc_output": self.blocks[-1]}
         )
         self.num_blocks = len(self.blocks)
 
@@ -288,20 +295,16 @@ class MNISTNet(MetricNetwork):
 
         # define fully connected layers
         self.classifier = nn.Sequential(
-            OrderedDict(
-                {
-                    "flatten": nn.Flatten(),
-                    "fc1": nn.Linear(conv_final_ndim(), 256),
-                    "nl": nonlinearity(),
-                    "fc2": nn.Linear(256, hyperparams[3]),
-                }
-            )
+            nn.Flatten(),
+            nn.Linear(conv_final_ndim(), 256),
+            nonlinearity(),
+            nn.Linear(256, hyperparams[3]),
         )
 
         # update return nodes (output hooks)
         self._register_hooks(
-            {f"nc_layer_{i}": block.nl for i, block in enumerate(self.blocks)}
-            | {"nc_output": self.classifier.fc2}
+            {f"nc_layer_{i}": block for i, block in enumerate(self.blocks)}
+            | {"nc_output": self.classifier[2]}
         )
         self.num_blocks = len(self.blocks)
 
@@ -344,10 +347,12 @@ class Block(nn.Module):
 class MaxPoolFC(nn.Module):
     def __init__(self, in_features: int, out_features: int) -> None:
         super().__init__()
+        self.dummy = nn.Identity()  # provides output for the hook
         self.fc = nn.Linear(in_features, out_features)
 
     def forward(self, x: torch.Tensor):
         x = x.amax((-2, -1))  # global max pooling (N, C, H, W) -> (N, C)
+        x = self.dummy(x)
         return self.fc(x)
 
 
@@ -374,7 +379,7 @@ class CIFARNet(MetricNetwork):
         # update return nodes (output hooks)
         self._register_hooks(
             {f"nc_layer_{i}": block for i, block in enumerate(self.blocks)}
-            | {"nc_output": self.head.fc}
+            | {"nc_output": self.head.dummy}
         )
         self.num_blocks = len(self.blocks)
 
@@ -395,20 +400,17 @@ class ConvNeXt(MetricNetwork):
         # import torchvision model
         self.convnext = convnext_tiny(num_classes=hyperparams[3])
 
-        # replace first and last layer to match input and output shapes
-        old_conv1 = self.convnext.features[0][0]
+        # replace first layer to match input shape
+        # (parameters copied from the original model)
         self.convnext.features[0][0] = nn.Conv2d(
-            in_channels=in_shape[0],
-            out_channels=old_conv1.out_channels,
-            kernel_size=old_conv1.kernel_size,
-            stride=old_conv1.stride,
+            in_channels=in_shape[0], out_channels=96, kernel_size=4, stride=4
         )
 
         # update return nodes (output hooks)
         new_hooks = {}
         for i, j in zip(range(4), (2, 2, 8, 2)):
             new_hooks[f"nc_layer_{i}"] = self.convnext.features[2 * i + 1][j]
-        new_hooks["nc_output"] = self.convnext.classifier[2]
+        new_hooks["nc_output"] = self.convnext.classifier[1]
         self._register_hooks(new_hooks)
         self.num_blocks = len(self.convnext.features) // 2
 
@@ -433,15 +435,15 @@ class ResNet(MetricNetwork):
         # import torchvision model
         self.resnet = resnet18(num_classes=hyperparams[3])
 
-        # replace first and last layer to match input and output shapes
-        old_conv1 = self.resnet.conv1
+        # replace first layer to match input shape
+        # (parameters copied from the original model)
         self.resnet.conv1 = nn.Conv2d(
             in_channels=in_shape[0],
-            out_channels=old_conv1.out_channels,
-            kernel_size=old_conv1.kernel_size,
-            stride=old_conv1.stride,
-            padding=old_conv1.padding,
-            bias=old_conv1.bias is not None,
+            out_channels=64,
+            kernel_size=7,
+            stride=2,
+            padding=3,
+            bias=False,
         )
 
         # update return nodes (output hooks)
@@ -449,7 +451,7 @@ class ResNet(MetricNetwork):
         for i in range(4):
             layer = getattr(self.resnet, f"layer{i + 1}")
             new_hooks[f"nc_layer_{i}"] = layer[1].relu
-        new_hooks["nc_output"] = self.resnet.fc
+        new_hooks["nc_output"] = self.resnet.avgpool
         self._register_hooks(new_hooks)
         self.num_blocks = 4
 

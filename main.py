@@ -55,7 +55,6 @@ hyperparams = (
     optimiser,
     args.learning_rate,
     dm.num_classes,
-    len(dm.train_dataloader()) * args.epochs,
     not args.compile,
 )
 

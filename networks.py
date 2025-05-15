@@ -4,7 +4,6 @@ from copy import deepcopy
 import torch
 from lightning import LightningModule
 from torch import nn, optim
-from torch.optim.lr_scheduler import OneCycleLR
 from torchmetrics.functional.classification import multiclass_accuracy
 from torchvision.models import convnext_tiny, resnet18
 
@@ -16,7 +15,6 @@ HPARAM_TYPE = tuple[
     OPT_TYPE,  # optimiser
     float,  # learning rate
     int,  # number of classes
-    int,  # total steps
     bool,  # if the model should be compiled
 ]
 
@@ -33,7 +31,6 @@ class _Network(LightningModule):
         optimiser: OPT_TYPE,
         learning_rate: float,
         num_classes: int,
-        total_steps: int,
         no_compile: bool,
         ignore: list[str] = [],  # ignored hyperparameters
     ):
@@ -65,7 +62,6 @@ class _Network(LightningModule):
                 num_classes=self.hparams_initial["num_classes"],
             )
             self.log("train_acc", acc, sync_dist=True)
-            # self.log("lr", self.lr_schedulers().get_last_lr()[0])
 
         return loss
 
@@ -78,19 +74,6 @@ class _Network(LightningModule):
             self._opt_parameters(), lr=self.hparams_initial["learning_rate"], fused=True
         )
         return optimiser
-        lr_scheduler = OneCycleLR(
-            optimiser,
-            max_lr=self.hparams_initial["learning_rate"],
-            total_steps=self.hparams_initial["total_steps"],
-            cycle_momentum=False,
-        )
-        return {
-            "optimizer": optimiser,
-            "lr_scheduler": {
-                "scheduler": lr_scheduler,
-                "interval": "step",
-            },
-        }
 
 
 class DIBNetwork(_Network):
@@ -99,7 +82,6 @@ class DIBNetwork(_Network):
         encoder: nn.Module,
         decoder: nn.Module,
         num_decoders: int,
-        total_steps: int,
         hyperparams: HPARAM_TYPE,
     ):
         """
@@ -113,13 +95,8 @@ class DIBNetwork(_Network):
         ```
         Before training, all decoders are reset.
         """
-        super().__init__(
-            nn.CrossEntropyLoss,
-            *hyperparams[1:4],
-            total_steps,
-            hyperparams[-1],
-            ["encoder", "decoder"],
-        )
+        super().__init__(nn.CrossEntropyLoss, *hyperparams[1:], ["encoder", "decoder"])
+        
         # copy encoder to ensure correct device placement of parameters
         self.encoder = deepcopy(encoder).requires_grad_(False).eval()
         self.decoders = nn.ModuleList(deepcopy(decoder) for _ in range(num_decoders))

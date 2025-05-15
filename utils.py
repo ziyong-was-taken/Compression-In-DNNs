@@ -185,7 +185,7 @@ class ComputeNC1(Callback):
     ):
         """Aggregate batched NC metrics and log them"""
 
-        # synchronise metrics
+        # sum metrics across processes
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             for class_sums in self.all_class_sums.values():
                 torch.distributed.all_reduce(class_sums)
@@ -233,12 +233,12 @@ class ComputeNC1(Callback):
                     (matrix_prod[:, mask] / eigvals[i, mask]) ** 2
                 ).sum()
 
-        # synchronise metrics again
+        # sum metrics across processes again
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             for nc_value in nc.values():
                 torch.distributed.all_reduce(nc_value)
 
-        # final factor
+        # final scaling factor
         nc = {key: value * self.num_classes / total_count for key, value in nc.items()}
 
         # only log on process 0 since value is the same for all processes
@@ -282,11 +282,7 @@ class ComputeDIB(Callback):
         num_devices: int,
         *block_indices: int,
     ):
-        # compute DIB data metrics
         self.dib_dm = dib_dm
-        self.dib_dm.prepare_data()
-        self.dib_dm.setup("fit")
-
         self.dib_epochs = dib_epochs
         self.num_devices = num_devices
         self.block_indices = block_indices
@@ -301,18 +297,17 @@ class ComputeDIB(Callback):
 
         # create DIB networks for each block for both datasets
         hyperparams = tuple(network.hparams_initial.values())
-        for dataset in ("train", "val"):
-            steps_per_epoch = len(getattr(self.dib_dm, f"{dataset}_dataloader")())
-            total_steps = steps_per_epoch * self.dib_epochs
-            self.dib_nets[dataset] = [
+        self.dib_nets = {
+            dataset: [
                 DIBNetwork(
                     *network.get_encoder_decoder(block_idx),
                     self.dib_dm.num_decoders[dataset],
-                    total_steps,
                     hyperparams,
                 )
                 for block_idx in self.block_indices
             ]
+            for dataset in ("train", "val")
+        }
 
     def on_train_epoch_end(self, trainer: Trainer, network: MetricNetwork):
         """
@@ -331,6 +326,7 @@ class ComputeDIB(Callback):
                 self.dib_nets[dataset][i].reset_decoders()
 
                 # train DIB network
+                self.dib_dm.setup("fit")
                 dib_trainer = Trainer(
                     devices=self.num_devices,
                     precision="bf16-true",

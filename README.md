@@ -118,13 +118,13 @@ Hyperparameters are stored in `lightning_logs/version_X/hparams.yaml` and the me
 
 ## Algorithms
 
-Both the NC1 and DIB metrics are computed after each epoch.
+Both the NC1 and DIB metrics are computed after each epoch for both the train and test set.
 
 ### Modified Algorithm 1
 
 1. For each class $y$, enumerate the samples $\mathcal X_y = \{x ∣ x$ has label $y\}$, i.e., assign them the indices $0,1,…,|\mathcal X_y| - 1$
-2. Convert each index to base $C$ (the number of classes), implicitly padding with zeros to the left. It is easy to see that the maximum number of digits is $⌈\log_{|Y|}(\max\{|\mathcal X_y| : y ∈ Y\})⌉$.
-3. the new labels for each sample are the digits of its base-$C$ representation
+2. Convert each index to base $C$ (the number of classes), implicitly padding with zeros to the left. It is easy to see that the maximum number of digits is $N_D = ⌈\log_{|Y|}(\max\{|\mathcal X_y| : y ∈ Y\})⌉$.
+3. The new labels for each sample are the digits of its base-$C$ representation.
 
 <!-- markdownlint-disable MD033 -->
 <details>
@@ -140,7 +140,7 @@ The new sample labels are then [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] and [0, 1, 2
 
 ### NC1 Computation
 
-- goal: each epoch, compute $\operatorname{tr}(Σ_W^l Σ_B^{l+})$ for all layers $l ∈ ℒ$
+- Goal: each epoch, compute $\operatorname{tr}(Σ_W^l (Σ_B^l)⁺)$ for all layers $l ∈ ℒ$
 - The activations $\{𝐡ˡ_{c,i}\}_{l∈ℒ,\ c ∈ \{1,…,C\},\ i ∈ \{1,…,N\}}$ are accessed by registering forward hooks at the penultimate layer as well as:
   - MLP: after each nonlinearity
   - MNISTNet: after each convolutional block
@@ -162,24 +162,40 @@ The algorithm requires *two* passes over the dataset.
    - compute $\boldsymbol μ_c^l = \frac 1{n_c} ∑_{i=1}^{n_c} 𝐡_{c,i}^l$ for $c = 1,…,C$
    - compute $\bar{\boldsymbol μ}ˡ = \frac 1N ∑_{c=1}^C ∑_{i=1}^{n_c} 𝐡_{c,i}^l$ where $N = Σ_{c=1}^C n_c$
    - compute $𝐌ˡ = [\boldsymbol μ₁ˡ - \bar{\boldsymbol μ}ˡ, ⋯, \boldsymbol μ_C^l - \bar{\boldsymbol μ}ˡ]$, recall: $Σ_B^l = \frac1C 𝐌ˡ(𝐌ˡ)^⊤$
-   - since $𝐌ˡ(𝐌ˡ)^⊤$ and $(𝐌ˡ)^⊤𝐌ˡ$ share eigenvalues (see proof of step 4), compute the eigendecomposition of (the much smaller) $(𝐌ˡ)^⊤𝐌ˡ = 𝐕𝚲𝐕^⊤$
-3. (**second pass**): After each batch, update the running sum $∑_{c=1}^C ∑_{i=1}^{n_c} \left(\frac{(κ_{c,i})_j}{λ_j}\right)²$ where $κ_{c,i} = 𝐕^⊤(𝐌ˡ)^⊤(𝐡_{c,i}^l - \boldsymbol μ_c^l) ∈ ℝ^C$ and $𝚲 = \operatorname{diag}(λ₁, …, λ_C)$.
-4. Finally, $\operatorname{tr}(Σ_W^l Σ_B^{l+}) = \frac CN ∑_{c=1}^C ∑_{i=1}^{n_c} \left(\frac{(κ_{c,i})_j}{λ_j}\right)²$
+   - since $𝐌ˡ(𝐌ˡ)^⊤$ and $(𝐌ˡ)^⊤𝐌ˡ$ share eigenvalues (see proof of step 4), compute the eigendecomposition of (the much smaller matrix) $(𝐌ˡ)^⊤𝐌ˡ = 𝐕𝚲𝐕^⊤$
+3. (**second pass**): After each batch, update the running sum $S_{\operatorname{tr}} = ∑_{c=1}^C ∑_{i=1}^{n_c} ∑_{j=1}^r \left(\frac{(κ_{c,i})_j}{λ_j}\right)²$ where $κ_{c,i} = 𝐕^⊤(𝐌ˡ)^⊤(𝐡_{c,i}^l - \boldsymbol μ_c^l) ∈ ℝ^C$ and $𝚲 = \operatorname{diag}(λ₁,…,λ_r,0,\dots,0) ∈ ℝ^{C×C}$.
+4. Finally, $\operatorname{tr}(Σ_W^l(Σ_B^l)⁺) = \frac CN S_{\operatorname{tr}}$
 
 <!-- markdownlint-disable MD033 -->
 <details>
 <summary>Proof of Step 4</summary>
 
-Consider the SVD of $𝐌ˡ = 𝐔𝐒𝐕^⊤$. We then have $𝐌ˡ𝐕𝐒^{-1} = 𝐔$ and
+Consider the SVD of $𝐌ˡ = 𝐔𝐒𝐕^⊤$. We then have $𝐌ˡ𝐕𝐒⁺ = 𝐔$ and
 $$
   𝐌ˡ(𝐌ˡ)^⊤ = 𝐔𝐒𝐕^⊤𝐕𝐒𝐔^⊤ = 𝐔𝐒²𝐔^⊤ = 𝐔𝚲𝐔^⊤ \\
 (𝐌ˡ)^⊤𝐌ˡ = 𝐕𝐒𝐔^⊤𝐔𝐒𝐕^⊤ = 𝐕𝐒²𝐕^⊤ = 𝐕𝚲𝐕^⊤
 $$
 By definition of the pseudoinverse, since $Σ_B^l = \frac1C 𝐌ˡ(𝐌ˡ)^⊤ = 𝐔(𝚲/C)𝐔^⊤$,
-$Σ_B^{l+} = 𝐔(𝚲/C)⁺𝐔^⊤ = C𝐔𝚲^{-1}𝐔^⊤$.
+$$
+  (Σ_B^l)⁺ = 𝐔(𝚲/C)⁺𝐔^⊤ = C𝐔𝚲⁺𝐔^⊤ = C𝐌ˡ𝐕(\sqrt{𝚲})⁺𝚲⁺(\sqrt{𝚲})⁺𝐕^⊤(𝐌ˡ)^⊤ = C𝐌ˡ𝐕(𝚲²)⁺𝐕^⊤(𝐌ˡ)^⊤
+$$
 Now, since $\operatorname{tr}(𝐚𝐛^⊤) = 𝐛^⊤𝐚$ for vectors $𝐚,𝐛$, we have
 $$
-  \operatorname{tr}(Σ_W^l Σ_B^{l+}) = \frac1N \operatorname{tr}((𝐡_{c,i}^l - \boldsymbol μ_c^l)(𝐡_{c,i}^l - \boldsymbol μ_c^l)^⊤) \\
+\begin{align*}
+  \operatorname{tr}(Σ_W^l (Σ_B^l)⁺)
+    &= \frac1N ∑_{c=1}^C ∑_{i=1}^{n_c} \operatorname{tr}((𝐡_{c,i}^l - \boldsymbol μ_c^l)(𝐡_{c,i}^l - \boldsymbol μ_c^l)^⊤(Σ_B^l)⁺) \\
+    &= \frac1N ∑_{c=1}^C ∑_{i=1}^{n_c} (𝐡_{c,i}^l - \boldsymbol μ_c^l)^⊤(Σ_B^l)⁺(𝐡_{c,i}^l - \boldsymbol μ_c^l) \\
+    &= \frac CN ∑_{c=1}^C ∑_{i=1}^{n_c} (𝐡_{c,i}^l - \boldsymbol μ_c^l)^⊤𝐌ˡ𝐕(𝚲²)⁺\underbrace{𝐕^⊤(𝐌ˡ)^⊤(𝐡_{c,i}^l - \boldsymbol μ_c^l)}_κ \\
+    &= \frac CN ∑_{c=1}^C ∑_{i=1}^{n_c} κ^⊤
+        \left[\begin{array}{ccc|c}
+          \frac1{\lambda₁²} &        & 𝟎                   &   \\
+                            & \ddots &                     & 𝟎 \\
+          𝟎                 &        & \frac 1{\lambda_r²} &   \\
+          \hline
+                            & 𝟎      &                     & 𝟎 \\
+        \end{array}\right]κ \\
+    &= \frac CN ∑_{c=1}^C ∑_{i=1}^{n_c} ∑_{j=1}^r \left(\frac{(κ_{c,i})_j}{λ_j}\right)²
+\end{align*}
 $$
 
 </details>
@@ -187,10 +203,10 @@ $$
 
 ### DIB Computation
 
-1. compute new labels for all samples using [modified Algorithm 1](#modified-algorithm-1)
-2. split the original network $N$ into an encoder $E$ and decoder $D$
-3. for each new labelling of the samples, create a copy of $D$
-4. combine the encoder $E$ and decoders into a single model $M$
+1. Compute new labels for all samples using [modified Algorithm 1](#modified-algorithm-1)
+2. Split the original network $N$ into an encoder $E$ and decoder $D$
+3. Freeze $E$
+4. Combine $E$ and $N_D$ copies of $D$ into a single model $M$
    <!---->
    ```plaintext
            D
@@ -200,10 +216,10 @@ $$
            D
    ```
    <!---->
-5. train $M$ using cross-entropy loss
-6. return the final training loss of $M$
-7. for each epoch,
-   - update the parameters of $E$ with those of $N$
-   - reset the parameters of $D$
-   - repeat steps 2-6
-8. repeat steps 2-7 for every (interesting) encoder-decoder split of $N$
+5. Train $M$ using cross-entropy loss
+6. Return the final training loss of $M$. This is the DIB metric.
+7. Repeat for every (interesting) encoder-decoder split of $N$
+
+Note: At the end of each epoch after the first, instead of recopying $E$ and $D$,
+simply update the parameters of $E$ with those of $N$, keeping $E$ frozen,
+and reset the parameters of $D$.

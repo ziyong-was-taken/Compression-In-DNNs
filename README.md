@@ -19,7 +19,7 @@ It is mainly implemented using [(PyTorch) Lightning](https://lightning.ai/docs/p
 ## Usage
 
 The easiest way to run the code is to use [conda](https://conda.org/).
-Simply create a new environment using the provided `environment.yaml` file and the following commands:
+Simply create a new environment using the provided [`environment.yaml`](./environment.yaml) file and the following commands:
 
 ```bash
 # create and activate the environment (name: master_thesis)
@@ -62,24 +62,25 @@ apptainer run --nv master_thesis.sif python main.py --flag value
 ### Requirements
 
 - `lightning>=2.5.1`: [(PyTorch) Lightning](https://lightning.ai/docs/pytorch/stable/) is the main framework used
-- `torchvision>=0.21.0`: datasets and models are imported from [torchvision](https://pytorch.org/vision/stable/index.html)
-  - note: The conda solver prioritises the CPU build of `torchvision` (over the CUDA build) due to its higher build number.
-  - To force the CUDA build, use `torchvision>=0.21.0=cuda*` instead
+- `torchvision>=0.21.0`[^CUDA]: datasets and models are imported from [torchvision](https://pytorch.org/vision/stable/index.html)
 - `cuda_compiler>=12.8.1` CUDA compiler for [`torch.compile()`](https://pytorch.org/docs/stable/generated/torch.compile.html) (also installs C and C++ compilers)
 - `ipykernel>=6.29.5`: necessary to run Jupyter notebook
 - `matplotlib>=3.10.1`: used to create plots
 - `pandas>=2.2.3`: used to read csv data
 
+[^CUDA]: The conda solver prioritises the CPU build of `torchvision` (over the CUDA build) due to its higher build number.
+To force the CUDA build, use `torchvision>=0.21.0=cuda*` instead.
+
 ### Flags
 
-- example flags include `-m` to choose the model and `-d` to choose the dataset
-- for example,
+- Example flags include `-m` to choose the model and `-d` to choose the dataset.
+- For example,
   <!---->
   ```bash
   python main.py -m MLP -d MNIST
   ```
   <!---->
-  uses a multi-layer perceptron model and the MNIST dataset
+  uses a multi-layer perceptron model and the MNIST dataset.
 - supported models (case-sensitive):
   - `MLP`: multi-layer perceptron with custom widths specified by `-w` and nonlinearity specified by `-nl`
   - `MNISTNet`: [Tuomas Oikarinen's optimised CNN](https://github.com/tuomaso/train_mnist_fast)
@@ -91,26 +92,26 @@ apptainer run --nv master_thesis.sif python main.py --flag value
   - `FashionMNIST`: [Fashion-MNIST](https://github.com/zalandoresearch/fashion-mnist)
   - `MNIST`: [MNIST](http://yann.lecun.com/exdb/mnist/)
   - `SZT`: the dataset (included in the repository) used by [Schwartz-Ziv & Tishby (2017)](https://arxiv.org/abs/1703.00810)
-- for a full list of flags, run `python main.py --help`
-- further information is also available in the `get_args()` function of `utils.py`
+- For a full list of flags, run `python main.py --help`.
+- Further information is also available in the `get_args()` function of [`utils.py`](./utils.py).
 
 ### Plotting Results
 
-To plot the results, run the cells in the Jupyter notebook `plots.ipynb` using the conda environment from above as the kernel.
+To plot the results, run the cells in the Jupyter notebook [`plots.ipynb`](./plots.ipynb) using the conda environment from above as the kernel.
 Alternatively, any kernel with `ipykernel>=6.29.5`, `matplotlib>=3.10.1`, and `pandas>=2.2.3` installed should also work.
 
 ## Code Structure
 
 The code consists of four main Python modules and one Jupyter notebook:
 
-- `datasets.py`: logic for loading and transforming the datasets, also contains a slightly modified version of Algorithm 1 of [Learning Optimal Representations with the Decodable Information Bottleneck](https://proceedings.neurips.cc/paper_files/paper/2020/hash/d8ea5f53c1b1eb087ac2e356253395d8-Abstract.html) (see [Modified Algorithm 1](#modified-algorithm-1))
-- `main.py`: "glue code" which
+- [`datasets.py`](./datasets.py): contains logic for loading and transforming the datasets; also contains a slightly modified version of Algorithm 1 of [Learning Optimal Representations with the Decodable Information Bottleneck](https://proceedings.neurips.cc/paper_files/paper/2020/hash/d8ea5f53c1b1eb087ac2e356253395d8-Abstract.html) (see [Modified Algorithm 1](#modified-algorithm-1))
+- [`main.py`](./main.py): "Glue code" which
   - sets up the dataset(s),
   - uses an (optional) learning rate (LR) tuner based on the LR range test of [Cyclical Learning Rates for Training Neural Networks](https://ieeexplore.ieee.org/document/7926641), and
-  - creates and trains the model
-- `networks.py`: network architectures
-- `utils.py`: contains the command line flag parser and the algorithms for computing the NC1 metric and the DIB (see [Algorithms](#algorithms) for more details)
-- `plots.ipynb`: notebook for creating plots
+  - creates and trains the model.
+- [`networks.py`](./networks.py): network architectures
+- [`utils.py`](./utils.py): contains the command line flag parser and the algorithms for computing the NC1 metric and the DIB (see [Algorithms](#algorithms) for more details)
+- [`plots.ipynb`](./plots.ipynb): notebook for creating plots
 
 When using a dataset for the first time, Lightning will download it into the directory specified by `--data-dir` (default: `data/`).
 Lightning stores model checkpoints for the main network in `lightning_logs/version_X/checkpoints/` and model checkpoints for the DIB network in `lightning_logs/checkpoints`.
@@ -170,14 +171,14 @@ The algorithm requires *two* passes over the dataset.
 <details>
 <summary>Proof of Step 4</summary>
 
-Consider the SVD of $𝐌ˡ = 𝐔𝐒𝐕^⊤$. We then have $𝐌ˡ𝐕𝐒⁺ = 𝐔$ and
+Consider the SVD $𝐌ˡ = 𝐔𝐒𝐕^⊤$. We then have $𝐌ˡ𝐕𝐒⁺ = 𝐔$ and
 $$
   𝐌ˡ(𝐌ˡ)^⊤ = 𝐔𝐒𝐕^⊤𝐕𝐒𝐔^⊤ = 𝐔𝐒²𝐔^⊤ = 𝐔𝚲𝐔^⊤ \\
-(𝐌ˡ)^⊤𝐌ˡ = 𝐕𝐒𝐔^⊤𝐔𝐒𝐕^⊤ = 𝐕𝐒²𝐕^⊤ = 𝐕𝚲𝐕^⊤
+  (𝐌ˡ)^⊤𝐌ˡ = 𝐕𝐒𝐔^⊤𝐔𝐒𝐕^⊤ = 𝐕𝐒²𝐕^⊤ = 𝐕𝚲𝐕^⊤
 $$
 By definition of the pseudoinverse, since $Σ_B^l = \frac1C 𝐌ˡ(𝐌ˡ)^⊤ = 𝐔(𝚲/C)𝐔^⊤$,
 $$
-  (Σ_B^l)⁺ = 𝐔(𝚲/C)⁺𝐔^⊤ = C𝐔𝚲⁺𝐔^⊤ = C𝐌ˡ𝐕(\sqrt{𝚲})⁺𝚲⁺(\sqrt{𝚲})⁺𝐕^⊤(𝐌ˡ)^⊤ = C𝐌ˡ𝐕(𝚲²)⁺𝐕^⊤(𝐌ˡ)^⊤
+  (Σ_B^l)⁺ = 𝐔(𝚲/C)⁺𝐔^⊤ = C𝐔𝚲⁺𝐔^⊤ = C𝐌ˡ𝐕(\sqrt{𝚲})⁺𝚲⁺(\sqrt{𝚲})⁺𝐕^⊤(𝐌ˡ)^⊤ = C𝐌ˡ𝐕(𝚲²)⁺𝐕^⊤(𝐌ˡ)^⊤.
 $$
 Now, since $\operatorname{tr}(𝐚𝐛^⊤) = 𝐛^⊤𝐚$ for vectors $𝐚,𝐛$, we have
 $$
@@ -194,7 +195,7 @@ $$
           \hline
                             & 𝟎      &                     & 𝟎 \\
         \end{array}\right]κ_{c,i} \\
-    &= \frac CN ∑_{c=1}^C ∑_{i=1}^{n_c} ∑_{j=1}^r \left(\frac{(κ_{c,i})_j}{λ_j}\right)²
+    &= \frac CN ∑_{c=1}^C ∑_{i=1}^{n_c} ∑_{j=1}^r \left(\frac{(κ_{c,i})_j}{λ_j}\right)².
 \end{align*}
 $$
 
@@ -203,10 +204,10 @@ $$
 
 ### DIB Computation
 
-1. Compute new labels for all samples using [modified Algorithm 1](#modified-algorithm-1)
-2. Split the original network $N$ into an encoder $E$ and decoder $D$
-3. Freeze $E$
-4. Combine $E$ and $N_D$ copies of $D$ into a single model $M$
+1. Compute new labels for all samples using [modified Algorithm 1](#modified-algorithm-1).
+2. Split the original network $N$ into an encoder $E$ and decoder $D$.
+3. Freeze $E$.
+4. Combine $E$ and $N_D$ copies of $D$ into a single model $M$.
    <!---->
    ```plaintext
            D
@@ -216,10 +217,10 @@ $$
            D
    ```
    <!---->
-5. Train $M$ using cross-entropy loss
+5. Train $M$ using cross-entropy loss.
 6. Return the final training loss of $M$. This is the DIB metric.
-7. Repeat for every (interesting) encoder-decoder split of $N$
+7. Repeat for every (interesting) encoder-decoder split of $N$.
 
-Note: At the end of each epoch after the first, instead of recopying $E$ and $D$,
+Note: At the end of each epoch after the first, instead of copying $E$ and $D$ again,
 simply update the parameters of $E$ with those of $N$, keeping $E$ frozen,
 and reset the parameters of $D$.

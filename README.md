@@ -185,15 +185,15 @@ $$
   \operatorname{tr}(Σ_W^l (Σ_B^l)⁺)
     &= \frac1N ∑_{c=1}^C ∑_{i=1}^{n_c} \operatorname{tr}((𝐡_{c,i}^l - \boldsymbol μ_c^l)(𝐡_{c,i}^l - \boldsymbol μ_c^l)^⊤(Σ_B^l)⁺) \\
     &= \frac1N ∑_{c=1}^C ∑_{i=1}^{n_c} (𝐡_{c,i}^l - \boldsymbol μ_c^l)^⊤(Σ_B^l)⁺(𝐡_{c,i}^l - \boldsymbol μ_c^l) \\
-    &= \frac CN ∑_{c=1}^C ∑_{i=1}^{n_c} (𝐡_{c,i}^l - \boldsymbol μ_c^l)^⊤𝐌ˡ𝐕(𝚲²)⁺\underbrace{𝐕^⊤(𝐌ˡ)^⊤(𝐡_{c,i}^l - \boldsymbol μ_c^l)}_κ \\
-    &= \frac CN ∑_{c=1}^C ∑_{i=1}^{n_c} κ^⊤
+    &= \frac CN ∑_{c=1}^C ∑_{i=1}^{n_c} (𝐡_{c,i}^l - \boldsymbol μ_c^l)^⊤𝐌ˡ𝐕(𝚲²)⁺\underbrace{𝐕^⊤(𝐌ˡ)^⊤(𝐡_{c,i}^l - \boldsymbol μ_c^l)}_{κ_{c,i}} \\
+    &= \frac CN ∑_{c=1}^C ∑_{i=1}^{n_c} κ_{c,i}^⊤
         \left[\begin{array}{ccc|c}
           \frac1{\lambda₁²} &        & 𝟎                   &   \\
                             & \ddots &                     & 𝟎 \\
           𝟎                 &        & \frac 1{\lambda_r²} &   \\
           \hline
                             & 𝟎      &                     & 𝟎 \\
-        \end{array}\right]κ \\
+        \end{array}\right]κ_{c,i} \\
     &= \frac CN ∑_{c=1}^C ∑_{i=1}^{n_c} ∑_{j=1}^r \left(\frac{(κ_{c,i})_j}{λ_j}\right)²
 \end{align*}
 $$

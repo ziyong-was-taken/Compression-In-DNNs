@@ -179,7 +179,7 @@ By definition of the pseudoinverse, since $Σ_B^l = \frac1C 𝐌ˡ(𝐌ˡ)^⊤ =
 $Σ_B^{l+} = 𝐔(𝚲/C)⁺𝐔^⊤ = C𝐔𝚲^{-1}𝐔^⊤$.
 Now, since $\operatorname{tr}(𝐚𝐛^⊤) = 𝐛^⊤𝐚$ for vectors $𝐚,𝐛$, we have
 $$
-  \operatorname{tr}(Σ_W^l Σ_B^{l+}) = \frac1N \operatorname{tr}((𝐡_{c,i}^l - \boldsymbol μ_c^l)(𝐡_{c,i}^l - 𝛍_c^l)^⊤) \\
+  \operatorname{tr}(Σ_W^l Σ_B^{l+}) = \frac1N \operatorname{tr}((𝐡_{c,i}^l - \boldsymbol μ_c^l)(𝐡_{c,i}^l - \boldsymbol μ_c^l)^⊤) \\
 $$
 
 </details>

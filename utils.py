@@ -188,7 +188,7 @@ class ComputeNC1(Callback):
     ):
         """Aggregate batched NC metrics and log them"""
 
-        # sum metrics across processes
+        # synchronise metrics across processes
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             for class_sums in self.all_class_sums.values():
                 torch.distributed.all_reduce(class_sums)
@@ -196,9 +196,9 @@ class ComputeNC1(Callback):
 
         class_means: dict[str, torch.Tensor] = {}
         centred_means: dict[str, torch.Tensor] = {}
-        rev_between_covs = []
+        gram_matrices = []
 
-        # compute means and reversed covariances
+        # compute means and gram matrices
         total_count = class_counts.sum()
         for i, (layer, class_sums) in enumerate(self.all_class_sums.items()):
             class_means[layer] = class_sums / class_counts.unsqueeze(
@@ -206,13 +206,13 @@ class ComputeNC1(Callback):
             )  # [𝛍_1^l ⋯ 𝛍_C^l]^⊤: (C, zˡ)
             global_mean = class_sums.sum(dim=0) / total_count  # ̄𝛍ˡ: (zˡ)
             centred_means[layer] = class_means[layer] - global_mean  # (𝐌ˡ)^⊤: (C, zˡ)
-            rev_between_covs.append(
+            gram_matrices.append(
                 centred_means[layer] @ centred_means[layer].T
             )  # (𝐌ˡ)^⊤ 𝐌ˡ: (C, C), recall: Σ_B^l = 1/C 𝐌ˡ(𝐌ˡ)^⊤
 
         # compute eigendecomposition of (𝐌ˡ)^⊤(𝐌ˡ)
-        eigvals, rev_eigvecs = torch.linalg.eigh(
-            torch.stack(rev_between_covs, dim=0)
+        eigvals, eigvecs = torch.linalg.eigh(
+            torch.stack(gram_matrices, dim=0)
         )  # (n_layers, C), (n_layers, C, C)
 
         # second pass
@@ -226,23 +226,22 @@ class ComputeNC1(Callback):
 
             # aggregate second pass
             for i, (layer, activations) in enumerate(network.batch_activations.items()):
+                # filter out eigenvalues and vectors close to zero for stability
+                mask = eigvals[i] > 1e-5 * eigvals[i].max()
+
                 matrix_prod = (
                     (activations - class_means[layer][targets]) @ centred_means[layer].T
-                ) @ rev_eigvecs[i]  # (𝐡_c^l - 𝛍_c^l)^⊤ 𝐌ˡ 𝐕: (batch, C)
+                ) @ eigvecs[i, :, mask]  # (𝐡_c^l - 𝛍_c^l)^⊤ 𝐌ˡ 𝐕: (batch, r)
 
-                # filter out eigenvalues close to zero for stability
-                mask = eigvals[i] > 1e-5 * eigvals[i].max()
-                nc[f"{layer}_{state}"] += (
-                    (matrix_prod[:, mask] / eigvals[i, mask]) ** 2
-                ).sum()
+                nc[f"{layer}_{state}"] += ((matrix_prod / eigvals[i, mask]) ** 2).sum()
+
+        # final scaling factor
+        nc = {key: value * self.num_classes / total_count for key, value in nc.items()}
 
         # sum metrics across processes again
         if torch.distributed.is_available() and torch.distributed.is_initialized():
             for nc_value in nc.values():
                 torch.distributed.all_reduce(nc_value)
-
-        # final scaling factor
-        nc = {key: value * self.num_classes / total_count for key, value in nc.items()}
 
         # only log on process 0 since value is the same for all processes
         if network.global_rank == 0:
@@ -289,7 +288,6 @@ class ComputeDIB(Callback):
         self.dib_epochs = dib_epochs
         self.num_devices = num_devices
         self.block_indices = block_indices
-        self.dib_nets: dict[str, list[DIBNetwork]] = {}
 
     def on_train_start(self, _trainer, network: MetricNetwork):
         """Create DIB networks for each block"""

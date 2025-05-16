@@ -38,7 +38,6 @@ trainer = Trainer(
     precision="bf16-true",
     max_epochs=args.epochs,
     logger=logger,
-    log_every_n_steps=25,
     benchmark=True,
     # deterministic=True, # ignored when benchmark=True
     num_sanity_val_steps=0,

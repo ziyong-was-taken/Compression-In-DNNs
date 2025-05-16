@@ -53,7 +53,7 @@ class _Network(LightningModule):
         inputs, targets = batch
         outputs: torch.Tensor = self(inputs)
         loss = self.hparams_initial["criterion"]()(outputs, targets)
-        self.log("train_loss", loss, sync_dist=True)
+        self.log("train_loss", loss, sync_dist=True, on_step=False, on_epoch=True)
 
         with torch.inference_mode():
             acc = multiclass_accuracy(
@@ -61,7 +61,7 @@ class _Network(LightningModule):
                 targets,
                 num_classes=self.hparams_initial["num_classes"],
             )
-            self.log("train_acc", acc, sync_dist=True)
+            self.log("train_acc", acc, sync_dist=True, on_step=False, on_epoch=True)
 
         return loss
 
@@ -96,7 +96,7 @@ class DIBNetwork(_Network):
         Before training, all decoders are reset.
         """
         super().__init__(nn.CrossEntropyLoss, *hyperparams[1:], ["encoder", "decoder"])
-        
+
         # copy encoder to ensure correct device placement of parameters
         self.encoder = deepcopy(encoder).requires_grad_(False).eval()
         self.decoders = nn.ModuleList(deepcopy(decoder) for _ in range(num_decoders))
@@ -135,8 +135,8 @@ class MetricNetwork(_Network):
     A blueprint which extends `_Network` with helper functions to compute NC1 and DIB
     """
 
-    def __init__(self, hyperparams: HPARAM_TYPE):
-        super().__init__(*hyperparams)
+    def __init__(self, hyperparams: HPARAM_TYPE, ignore: list[str] = []):
+        super().__init__(*hyperparams, ignore=["hyperparams", "ignore"] + ignore)
         self.num_blocks: int
         self.batch_activations: dict[str, torch.Tensor] = {}
 
@@ -147,7 +147,7 @@ class MetricNetwork(_Network):
         def get_hook(name):
             def hook(_module, _args, output: torch.Tensor):
                 self.batch_activations[name] = (
-                    output.detach().flatten(start_dim=1).to(torch.float)
+                    output.detach().flatten(start_dim=1).float()
                 )
 
             return hook
@@ -166,8 +166,8 @@ class MetricNetwork(_Network):
             targets,
             num_classes=self.hparams_initial["num_classes"],
         )
-        self.log("val_loss", loss, sync_dist=True)
-        self.log("val_acc", acc, sync_dist=True)
+        self.log("val_loss", loss, sync_dist=True, on_step=False, on_epoch=True)
+        self.log("val_acc", acc, sync_dist=True, on_step=False, on_epoch=True)
 
     def _check_encoder_blocks(self, encoder_blocks: int):
         assert encoder_blocks <= self.num_blocks, (
@@ -189,7 +189,7 @@ class MLP(MetricNetwork):
         nonlinearity: NL_TYPE,
         hyperparams: HPARAM_TYPE,
     ):
-        super().__init__(hyperparams)
+        super().__init__(hyperparams, ["widths", "nonlinearity"])
 
         # add layers
         self.flatten = nn.Flatten()
@@ -246,7 +246,7 @@ class MNISTNet(MetricNetwork):
     def __init__(
         self, in_shape: torch.Size, nonlinearity: NL_TYPE, hyperparams: HPARAM_TYPE
     ):
-        super().__init__(hyperparams)
+        super().__init__(hyperparams, ["in_shape", "nonlinearity"])
 
         # define convolutional blocks
         channels = (in_shape[0], 24, 32)
@@ -342,7 +342,7 @@ class CIFARNet(MetricNetwork):
     def __init__(
         self, in_shape: torch.Size, nonlinearity: NL_TYPE, hyperparams: HPARAM_TYPE
     ):
-        super().__init__(hyperparams)
+        super().__init__(hyperparams, ["in_shape", "nonlinearity"])
 
         channels = (in_shape[0], 64, 128, 256)
         self.blocks = nn.Sequential(
@@ -372,7 +372,7 @@ class CIFARNet(MetricNetwork):
 
 class ConvNeXt(MetricNetwork):
     def __init__(self, in_shape: torch.Size, hyperparams: HPARAM_TYPE):
-        super().__init__(hyperparams)
+        super().__init__(hyperparams, ["in_shape"])
 
         # import torchvision model
         self.convnext = convnext_tiny(num_classes=hyperparams[3])
@@ -407,7 +407,7 @@ class ConvNeXt(MetricNetwork):
 
 class ResNet(MetricNetwork):
     def __init__(self, in_shape: torch.Size, hyperparams: HPARAM_TYPE):
-        super().__init__(hyperparams)
+        super().__init__(hyperparams, ["in_shape"])
 
         # import torchvision model
         self.resnet = resnet18(num_classes=hyperparams[3])

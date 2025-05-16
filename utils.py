@@ -14,6 +14,7 @@ DIB_EPOCHS = 30
 EPOCHS = 15
 LR = 2e-3
 NUM_DEVICES = 1
+TUNE = False
 
 
 class WideHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
@@ -56,6 +57,7 @@ def get_args():
           --num-devices: number of devices used to train the DIB network
     -opt, --optimiser: optimiser to use
           --seed: seed for random number generation
+          --tune: tune the learning rate
     -w,   --widths: widths of hidden layers of MLP
     """
 
@@ -110,6 +112,7 @@ def get_args():
         choices=["AdamW", "Adam", "SGD"],
     )
     parser.add_argument("--seed", default=0, type=int)
+    parser.add_argument("--tune", action=argparse.BooleanOptionalAction, default=TUNE)
     parser.add_argument(
         "-w",
         "--widths",

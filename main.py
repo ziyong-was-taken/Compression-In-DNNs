@@ -73,20 +73,22 @@ with trainer.init_module():
         case _:
             model = getattr(networks, args.model)(dm.input_size, hyperparams)
 
-# create tuner
-dummy_trainer = Trainer(
-    devices=1,
-    max_epochs=-1,
-    barebones=True,
-    benchmark=True,
-    # deterministic=True, # ignored when benchmark=True
-)
-tuner = Tuner(dummy_trainer)
+if args.tune:
+    # create tuner
+    dummy_trainer = Trainer(
+        devices=1,
+        precision="bf16-true",
+        max_epochs=-1,
+        barebones=True,
+        benchmark=True,
+        # deterministic=True, # ignored when benchmark=True
+    )
+    tuner = Tuner(dummy_trainer)
 
-# tune learning rate
-lr_finder = tuner.lr_find(model, datamodule=dm, update_attr=True)
-if not args.compile:  # plotting breaks the computation graph
-    lr_finder.plot(suggest=True, show=True)
+    # tune learning rate
+    lr_finder = tuner.lr_find(model, datamodule=dm, update_attr=True)
+    if not args.compile:  # plotting breaks the computation graph
+        lr_finder.plot(suggest=True, show=True)
 
 # train model
 trainer.fit(model, datamodule=dm)

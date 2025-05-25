@@ -205,8 +205,7 @@ class MLP(MetricNetwork):
 
         # update return nodes (output hooks)
         self._register_hooks(
-            {f"nc_layer_{i}": block for i, block in enumerate(self.blocks[:-1])}
-            | {"nc_output": self.blocks[-1]}
+            {f"nc_layer_{i + 1}": block for i, block in enumerate(self.blocks)}
         )
         self.num_blocks = len(self.blocks)
 
@@ -220,27 +219,24 @@ class MLP(MetricNetwork):
         return encoder, decoder
 
 
-class ConvPoolActivation(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int,
-        nonlinearity: NL_TYPE,
-    ):
+class _ConvPoolActivation(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, nonlinearity: NL_TYPE):
         super().__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size)
-        self.pool = nn.MaxPool2d(2)
+        self.conv = nn.Conv2d(in_channels, out_channels, 5, padding="same")
+        self.bn = nn.BatchNorm2d(out_channels, track_running_stats=False)
+        self.pool = nn.MaxPool2d(3)
         self.nl = nonlinearity()
 
     def forward(self, x):
-        return self.nl(self.pool(self.conv(x)))
+        return self.nl(self.pool(self.bn(self.conv(x))))
 
 
 class MNISTNet(MetricNetwork):
     """
+    Based on the current 94% CIFAR-10 speedrun world record holder by Keller Jordan
+    (https://github.com/KellerJordan/cifar10-airbench) and
     Tuomas Oikarinen's performance-focussed (both in speed and accuracy) CNN.
-    https://github.com/tuomaso/train_mnist_fast
+    (https://github.com/tuomaso/train_mnist_fast)
     """
 
     def __init__(
@@ -248,54 +244,32 @@ class MNISTNet(MetricNetwork):
     ):
         super().__init__(hyperparams, ["in_shape", "nonlinearity"])
 
-        # define convolutional blocks
-        channels = (in_shape[0], 24, 32)
-        kernels = (5, 3)
-        assert len(channels) == len(kernels) + 1, (
-            f"Number of channels ({len(channels)}) ≠ number of kernels ({len(kernels)}) + 1"
-        )
+        channels = (in_shape[0], 64, 128, 256)
         self.blocks = nn.Sequential(
             *(
-                ConvPoolActivation(*in_out_kernel, nonlinearity)
-                for in_out_kernel in zip(channels[:-1], channels[1:], kernels)
+                _ConvPoolActivation(*in_out_kernels, nonlinearity)
+                for in_out_kernels in zip(channels[:-1], channels[1:])
             )
         )
-
-        def conv_final_ndim():
-            """Helper function to compute the dimension after the convolutional layers"""
-            res = channels[-1]
-            for dim in in_shape[1:]:
-                for k in kernels:
-                    dim = (dim - (k - 1)) // 2
-                res *= dim
-            return res
-
-        # define fully connected layers
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(conv_final_ndim(), 256),
-            nonlinearity(),
-            nn.Linear(256, hyperparams[3]),
-        )
+        self.head = nn.Sequential(nn.Flatten(), nn.Linear(channels[-1], hyperparams[3]))
 
         # update return nodes (output hooks)
         self._register_hooks(
-            {f"nc_layer_{i}": block for i, block in enumerate(self.blocks)}
-            | {"nc_output": self.classifier[2]}
+            {f"nc_layer_{i + 1}": block for i, block in enumerate(self.blocks)}
         )
         self.num_blocks = len(self.blocks)
 
     def forward(self, x):
-        return self.classifier(self.blocks(x))
+        return self.head(self.blocks(x))
 
     def get_encoder_decoder(self, encoder_blocks):
         super()._check_encoder_blocks(encoder_blocks)
         encoder = nn.Sequential(*self.blocks[:encoder_blocks])
-        decoder = nn.Sequential(*self.blocks[encoder_blocks:], self.classifier)
+        decoder = nn.Sequential(*self.blocks[encoder_blocks:], self.head)
         return encoder, decoder
 
 
-class Block(nn.Module):
+class _Block(nn.Module):
     def __init__(
         self, in_channels: int, out_channels: int, nonlinearity: NL_TYPE
     ) -> None:
@@ -321,7 +295,7 @@ class Block(nn.Module):
         return x
 
 
-class MaxPoolFC(nn.Module):
+class _MaxPoolFC(nn.Module):
     def __init__(self, in_features: int, out_features: int) -> None:
         super().__init__()
         self.dummy = nn.Identity()  # provides output for the hook
@@ -347,15 +321,15 @@ class CIFARNet(MetricNetwork):
         channels = (in_shape[0], 64, 128, 256)
         self.blocks = nn.Sequential(
             *(
-                Block(in_channels, out_channels, nonlinearity)
+                _Block(in_channels, out_channels, nonlinearity)
                 for in_channels, out_channels in zip(channels[:-1], channels[1:])
             )
         )
-        self.head = MaxPoolFC(channels[-1], hyperparams[3])
+        self.head = _MaxPoolFC(channels[-1], hyperparams[3])
 
         # update return nodes (output hooks)
         self._register_hooks(
-            {f"nc_layer_{i}": block for i, block in enumerate(self.blocks)}
+            {f"nc_layer_{i + 1}": block for i, block in enumerate(self.blocks)}
             | {"nc_output": self.head.dummy}
         )
         self.num_blocks = len(self.blocks)

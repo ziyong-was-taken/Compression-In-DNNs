@@ -10,10 +10,14 @@ from networks import DIBNetwork, MetricNetwork
 # defaults for command line arguments
 BATCH_SIZE = 400
 COMPILE = True
-DIB_EPOCHS = 30
-EPOCHS = 15
+DATASET = "CIFAR10"
+DIB_EPOCHS = 50
+EPOCHS = 20
 LR = 2e-3
+MODEL = "CIFARNet"
 NUM_DEVICES = 1
+OPTIMISER = "AdamW"
+PRECISION = "bf16-true"
 TUNE = False
 
 
@@ -56,7 +60,9 @@ def get_args():
     -nl,  --nonlinearity: nonlinearity used in hidden layers of MLP, MNISTNet
           --num-devices: number of devices used to train the DIB network
     -opt, --optimiser: optimiser to use
+    -p,   --precision: precision to use for training
           --seed: seed for random number generation
+          --subset-idx: index of (stratified) training subset to use
           --tune: tune the learning rate
     -w,   --widths: widths of hidden layers of MLP
     """
@@ -76,18 +82,20 @@ def get_args():
     parser.add_argument(
         "-d",
         "--dataset",
-        default="CIFAR10",
+        default=DATASET,
         choices=["CIFAR10", "FashionMNIST", "MNIST", "SZT"],
     )
     parser.add_argument("--data-dir", default="data")
     parser.add_argument("--dib-epochs", default=DIB_EPOCHS, type=int)
     parser.add_argument("--epochs", default=EPOCHS, type=int)
     parser.add_argument("-lr", "--learning-rate", default=LR, type=float)
-    parser.add_argument("--loss", default="CrossEntropy", choices=["CrossEntropy"])
+    parser.add_argument(
+        "--loss", default="CrossEntropy", choices=["CrossEntropy"]
+    )  # TODO: add MSELoss
     parser.add_argument(
         "-m",
         "--model",
-        default="CIFARNet",
+        default=MODEL,
         choices=["CIFARNet", "ConvNeXt", "MLP", "MNISTNet", "ResNet"],
     )
     parser.add_argument(
@@ -108,10 +116,27 @@ def get_args():
     parser.add_argument(
         "-opt",
         "--optimiser",
-        default="AdamW",
+        default=OPTIMISER,
         choices=["AdamW", "Adam", "SGD"],
     )
+    parser.add_argument(
+        "-p",
+        "--precision",
+        default=PRECISION,
+        choices=["bf16-true", "32-true"],
+        help=(
+            "precision to use for training, "
+            "see https://lightning.ai/docs/pytorch/stable/common/precision.html "
+            "note that the NC metric will always be computed in 32-bit precision"
+        ),
+    )
     parser.add_argument("--seed", default=0, type=int)
+    parser.add_argument(
+        "--subset-idx",
+        default=0,
+        type=int,
+        help="index of (stratified) training subset to use",
+    )
     parser.add_argument("--tune", action=argparse.BooleanOptionalAction, default=TUNE)
     parser.add_argument(
         "-w",
@@ -330,7 +355,7 @@ class ComputeDIB(Callback):
                 self.dib_dm.setup("fit")
                 dib_trainer = Trainer(
                     devices=self.num_devices,
-                    precision="bf16-true",
+                    precision=trainer.precision,
                     max_epochs=self.dib_epochs,
                     logger=False,  # don't write (but do store) training losses
                     default_root_dir="lightning_logs",

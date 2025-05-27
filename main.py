@@ -27,7 +27,9 @@ criterion: LOSS_TYPE = getattr(nn, args.loss + "Loss")
 optimiser: OPT_TYPE = getattr(optim, args.optimiser)
 
 # setup and compute metrics of dataset
-dm = DataModule(dataset, args.data_dir, args.batch_size, args.num_devices)
+dm = DataModule(
+    args.subset_idx, dataset, args.data_dir, args.batch_size, args.num_devices
+)
 dm.prepare_data()
 dm.setup("fit")
 
@@ -35,7 +37,7 @@ dm.setup("fit")
 logger = CSVLogger(os.getcwd())
 trainer = Trainer(
     devices=args.num_devices,
-    precision="bf16-true",
+    precision=args.precision,
     max_epochs=args.epochs,
     logger=logger,
     benchmark=True,
@@ -76,7 +78,7 @@ if args.tune:
     # create tuner
     dummy_trainer = Trainer(
         devices=1,
-        precision="bf16-true",
+        precision=args.precision,
         max_epochs=-1,
         barebones=True,
         benchmark=True,

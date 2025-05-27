@@ -244,7 +244,7 @@ class MNISTNet(MetricNetwork):
     ):
         super().__init__(hyperparams, ["in_shape", "nonlinearity"])
 
-        channels = (in_shape[0], 64, 128, 256)
+        channels = (in_shape[0], 16, 32, 64)
         self.blocks = nn.Sequential(
             *(
                 _ConvPoolActivation(*in_out_kernels, nonlinearity)

@@ -43,10 +43,16 @@ DATASET_TYPE = type[CIFAR10 | FashionMNIST | MNIST | SZT]
 
 class DataModule(LightningDataModule):
     def __init__(
-        self, dataset: DATASET_TYPE, data_dir: str, batch_size: int, num_devices: int
+        self,
+        subset: int,
+        dataset: DATASET_TYPE,
+        data_dir: str,
+        batch_size: int,
+        num_devices: int,
     ):
         super().__init__()
 
+        self.subset = subset
         self.dataset = dataset
         self.data_dir = data_dir
         self.batch_size = batch_size
@@ -70,11 +76,42 @@ class DataModule(LightningDataModule):
             data.reshape(size_4d).movedim(3, 1).float(memory_format=torch.channels_last)
         )
 
+    def _get_stratification_mask(
+        self, labels: torch.Tensor, desired_size: int, subset: int
+    ):
+        """
+        Split `labels` into stratified subsets of size `desired_size` and
+        return Boolean mask of the samples in the `subset`th subset.
+        Undefined for large `subset` if the dataset is imbalanced.
+        """
+        assert 0 <= subset < labels.size(0) // desired_size, (
+            "Subset index out of range for the given desired size"
+        )
+        assert desired_size % self.num_classes == 0, (
+            "Desired size must be divisible by the number of classes"
+        )
+        desired_class_size = desired_size // self.num_classes
+
+        # enumerate samples of the same class
+        cum_counts = one_hot(labels, self.num_classes).cumsum(0)
+        indices = cum_counts[torch.arange(labels.size(0)), labels] - 1
+
+        # shift indices and compute mask
+        indices -= desired_class_size * subset
+        mask = (0 <= indices) & (indices < desired_class_size)
+        assert (size := mask.sum()) == desired_size, (
+            f"Size of mask {size} ≠ desired size {desired_size}"
+        )
+
+        return mask
+
     def setup(self, stage):
         """
         Setup the train and validation datasets.
         Before training, compute the input size, number of classes,
         and class distribution/counts for both datasets.
+        Instead of the full training set,
+        a stratified subset is used with the same size as the validation set.
         """
         match stage:
             case "fit":
@@ -84,28 +121,34 @@ class DataModule(LightningDataModule):
                     for train in (True, False)
                 ]
 
-                # train set metrics
-                self.input_size = train_ds[0][0].size()
-                self.num_classes = len(train_ds.classes)
-                self.train_labels = torch.as_tensor(train_ds.targets)
-                self.train_class_counts = self.train_labels.bincount()
-
-                # val set metrics
-                val_input_size = val_ds[0][0].size()
-                val_num_classes = len(val_ds.classes)
+                # validation set metrics
+                self.input_size = val_ds[0][0].size()
+                self.num_classes = len(val_ds.classes)
                 self.val_labels = torch.as_tensor(val_ds.targets)
                 self.val_class_counts = self.val_labels.bincount()
 
+                # compute stratification mask
+                labels = torch.as_tensor(train_ds.targets)
+                mask = self._get_stratification_mask(
+                    labels, self.val_labels.size(0), self.subset
+                )
+
+                # train set metrics
+                train_input_size = train_ds[0][0].size()
+                train_num_classes = len(train_ds.classes)
+                self.train_labels = labels[mask]
+                self.train_class_counts = self.train_labels.bincount()
+
                 # sanity checks
-                assert self.input_size == val_input_size, (
+                assert self.input_size == train_input_size, (
                     "Input size of train set does not match that of val set"
                 )
-                assert self.num_classes == val_num_classes, (
+                assert self.num_classes == train_num_classes, (
                     "Number of classes in train set does not match that of validation set"
                 )
                 for name, num_classes, class_counts in zip(
                     ("Train", "Validation"),
-                    (self.num_classes, val_num_classes),
+                    (train_num_classes, self.num_classes),
                     (self.train_class_counts, self.val_class_counts),
                 ):
                     assert num_classes == (count := class_counts.size(0)), (
@@ -114,10 +157,10 @@ class DataModule(LightningDataModule):
                     )
 
                 # define datasets
-                self.train = TensorDataset(
-                    self._preprocess(train_ds.data), self.train_labels
-                )
-                self.val = TensorDataset(self._preprocess(val_ds.data), self.val_labels)
+                self.train_data = self._preprocess(train_ds.data[mask])
+                self.val_data = self._preprocess(val_ds.data)
+                self.train = TensorDataset(self.train_data, self.train_labels)
+                self.val = TensorDataset(self.val_data, self.val_labels)
 
     def _dataloader(self, dataset, shuffle: bool):
         return DataLoader(
@@ -133,14 +176,17 @@ class DataModule(LightningDataModule):
         return self._dataloader(self.train, shuffle=True)
 
     def val_dataloader(self):
-        return self._dataloader(self.val, shuffle=False)
+        return self._dataloader(self.val, shuffle=True)
 
 
 class DIBData(DataModule):
     def __init__(self, dm: DataModule):
-        super().__init__(dm.dataset, dm.data_dir, dm.batch_size, dm.num_devices)
+        super().__init__(
+            dm.subset, dm.dataset, dm.data_dir, dm.batch_size, dm.num_devices
+        )
         self.labels = {"train": dm.train_labels, "val": dm.val_labels}
         self.class_counts = {"train": dm.train_class_counts, "val": dm.val_class_counts}
+        self.data = {"train": dm.train_data, "val": dm.val_data}
         self.num_classes = dm.num_classes
         self.num_decoders = {
             # ⌈log_{|Y|}(max{|X_y| : y ∈ Y})⌉ new labels per sample
@@ -162,30 +208,22 @@ class DIBData(DataModule):
 
         # enumerate samples of the same class
         cum_counts = one_hot(labels, self.num_classes).cumsum(0)
-        idcs = cum_counts[torch.arange(labels.size(0)), labels] - 1
+        indices = cum_counts[torch.arange(labels.size(0)), labels] - 1
 
         # base |Y| representation of indices padded with 0s to num_decoders digits
         divisors = torch.tensor(
             [self.num_classes**i for i in range(num_decoders - 1, -1, -1)]
         )
-        temp = idcs.unsqueeze(1).expand(-1, num_decoders)
+        temp = indices.unsqueeze(1).expand(-1, num_decoders)
         return (temp // divisors) % self.num_classes
 
     def setup(self, stage):
         match stage:
             case "fit":
-                # use test set for validation (okay since no model selection is done)
-                train_ds, val_ds = [
-                    self.dataset(self.data_dir, train=train, transform=self.transform)
-                    for train in (True, False)
-                ]
-
                 # create DIB datasets
                 train_dib_labels, val_dib_labels = (
                     self._base_expand(self.labels[dataset], self.num_decoders[dataset])
                     for dataset in ("train", "val")
                 )
-                self.train = TensorDataset(
-                    self._preprocess(train_ds.data), train_dib_labels
-                )
-                self.val = TensorDataset(self._preprocess(val_ds.data), val_dib_labels)
+                self.train = TensorDataset(self.data["train"], train_dib_labels)
+                self.val = TensorDataset(self.data["val"], val_dib_labels)

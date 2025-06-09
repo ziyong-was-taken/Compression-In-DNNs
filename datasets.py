@@ -63,6 +63,7 @@ class DataModule(LightningDataModule):
                 v2.ToDtype(torch.float, scale=True),  # uint8 {0,…,255} to float32 [0,1]
             ]
         )
+        self.num_decoders = {"train": 1, "val": 1}
 
     def prepare_data(self):
         for train in (True, False):
@@ -80,7 +81,7 @@ class DataModule(LightningDataModule):
         self, labels: torch.Tensor, desired_size: int, subset: int
     ):
         """
-        Split `labels` into stratified subsets of size `desired_size` and
+        Split `labels` into balanced subsets of size `desired_size` and
         return Boolean mask of the samples in the `subset`th subset.
         Undefined for large `subset` if the dataset is imbalanced.
         """

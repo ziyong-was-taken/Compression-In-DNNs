@@ -1,11 +1,12 @@
 import argparse
+import math
 from copy import deepcopy
 
 import torch
 from lightning import Callback, Trainer
 
-from datasets import DIBData
-from networks import DIBNetwork, MetricNetwork
+from datasets import DataModule, DIBData
+from networks import MetricNetwork, VInfoNet
 
 # defaults for command line arguments
 BATCH_SIZE = 400
@@ -19,6 +20,9 @@ NUM_DEVICES = 1
 OPTIMISER = "AdamW"
 PRECISION = "bf16-true"
 TUNE = False
+
+# type aliases
+DIB_PARAM_TYPE = tuple[int, int]  # (dib_epochs, num_devices)
 
 
 class WideHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
@@ -150,7 +154,7 @@ def get_args():
     return parser.parse_args()
 
 
-class ComputeNC1(Callback):
+class ComputeNC(Callback):
     """Compute and log NC metrics at the end of each epoch"""
 
     def __init__(
@@ -260,7 +264,7 @@ class ComputeNC1(Callback):
 
                 nc[f"{layer}_{state}"] += ((matrix_prod / eigvals[i, mask]) ** 2).sum()
 
-        # final scaling factor
+        # scale by C/N
         nc = {key: value * self.num_classes / total_count for key, value in nc.items()}
 
         # sum metrics across processes again
@@ -287,7 +291,7 @@ class ComputeNC1(Callback):
 
     def on_validation_start(self, _trainer, network: MetricNetwork):
         """
-        Store training NC1 metrics and reset them before validation.
+        Store training NC metrics and reset them before validation.
         Necessary since validation is done before the end of each training epoch
         (but after all training batches).
         """
@@ -299,35 +303,35 @@ class ComputeNC1(Callback):
         self.all_class_sums = self.train_class_sums
 
 
-class ComputeDIB(Callback):
-    """Compute and log the DIB metric at the end of each epoch"""
+class _ComputeVInfo(Callback):
+    """Compute and log the 𝒱-information at the end of each epoch"""
 
     def __init__(
         self,
-        dib_dm: DIBData,
+        dm: DataModule | DIBData,
         dib_epochs: int,
         num_devices: int,
+        name: str,
         *block_indices: int,
     ):
-        self.dib_dm = dib_dm
-        self.dib_epochs = dib_epochs
+        self.dm = dm
+        self.name = name
+        self.v_info_epochs = dib_epochs
         self.num_devices = num_devices
         self.block_indices = block_indices
 
     def on_train_start(self, _trainer, network: MetricNetwork):
-        """Create DIB networks for each block"""
-
         # default to all blocks if no block indices were given
         if not self.block_indices:
             self.block_indices = list(range(network.num_blocks + 1))
 
-        # create DIB networks for each block for both datasets
+        # create 𝒱-information networks for each block for both datasets
         hyperparams = tuple(network.hparams_initial.values())
-        self.dib_nets = {
+        self.v_info_nets = {
             dataset: [
-                DIBNetwork(
+                VInfoNet(
                     *network.get_encoder_decoder(block_idx),
-                    self.dib_dm.num_decoders[dataset],
+                    self.dm.num_decoders[dataset],
                     hyperparams,
                 )
                 for block_idx in self.block_indices
@@ -337,42 +341,62 @@ class ComputeDIB(Callback):
 
     def on_train_epoch_end(self, trainer: Trainer, network: MetricNetwork):
         """
-        Train the DIB network on both the training and validation DIB set
+        Train the 𝒱-information networks on both the training and validation set
         and log the final training loss for both sets.
         """
         for dataset in ("train", "val"):
-            # only train DIB0 (DIB network with non-trainable encoder) once
+            # only train 𝒱-information network with non-trainable encoder once
             not_first = trainer.current_epoch > 0
             for i, block_idx in enumerate(
                 self.block_indices[int(not_first) :], start=int(not_first)
             ):
-                # update DIB network before training
+                # update 𝒱-information network before training
                 encoder, _ = network.get_encoder_decoder(block_idx)
-                self.dib_nets[dataset][i].update_encoder(encoder)
-                self.dib_nets[dataset][i].reset_decoders()
+                self.v_info_nets[dataset][i].update_encoder(encoder)
+                self.v_info_nets[dataset][i].reset_decoders()
 
-                # train DIB network
-                self.dib_dm.setup("fit")
-                dib_trainer = Trainer(
+                # train 𝒱-information network
+                self.dm.setup("fit")
+                v_info_trainer = Trainer(
                     devices=self.num_devices,
                     precision=trainer.precision,
-                    max_epochs=self.dib_epochs,
+                    max_epochs=self.v_info_epochs,
                     logger=False,  # don't write (but do store) training losses
                     default_root_dir="lightning_logs",
                     benchmark=True,
                     # deterministic=True, # ignored when benchmark=True
                 )
-                dib_trainer.fit(
-                    self.dib_nets[dataset][i],
-                    getattr(self.dib_dm, f"{dataset}_dataloader")(),
+                v_info_trainer.fit(
+                    self.v_info_nets[dataset][i],
+                    getattr(self.dm, f"{dataset}_dataloader")(),
                 )
 
                 # only log on process 0 since value is the same for all processes
                 if network.global_rank == 0:
-                    # log final training loss, i.e., decodable information
-                    dib = dib_trainer.logged_metrics["train_loss"]
-                    network.log(f"dib_{block_idx}_{dataset}", dib, rank_zero_only=True)
+                    # compute and log 𝒱-information in bits
+                    v_info = math.log2(
+                        self.dm.num_classes
+                    ) - v_info_trainer.logged_metrics["train_loss"] / math.log(2)
+                    network.log(
+                        f"{self.name}_{block_idx}_{dataset}",
+                        v_info,
+                        rank_zero_only=True,
+                    )
 
     def on_train_end(self, _trainer, _network):
         """Clear DIB networks and free memory"""
-        self.dib_nets.clear()
+        self.v_info_nets.clear()
+
+
+class ComputeVSuff(_ComputeVInfo):
+    """Compute and log the sufficiency term I_𝒱ˡ(𝗵ˡ → y) at the end of each epoch"""
+
+    def __init__(self, datamodule: DataModule, dib_params: DIB_PARAM_TYPE):
+        super().__init__(datamodule, *dib_params, "vsuff")
+
+
+class ComputeVMin(_ComputeVInfo):
+    """Compute and log the minimality term I_𝒱ˡ(𝗵ˡ → Dec(𝘅, 𝒴)) at the end of each epoch"""
+
+    def __init__(self, dib_dm: DIBData, dib_params: DIB_PARAM_TYPE):
+        super().__init__(dib_dm, *dib_params, "vmin")

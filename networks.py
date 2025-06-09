@@ -76,7 +76,7 @@ class _Network(LightningModule):
         return optimiser
 
 
-class DIBNetwork(_Network):
+class VInfoNet(_Network):
     def __init__(
         self,
         encoder: nn.Module,
@@ -85,7 +85,7 @@ class DIBNetwork(_Network):
         hyperparams: HPARAM_TYPE,
     ):
         """
-        Create a network with multiple copies of `decoder` connected to a frozen copy of `encoder`.
+        Create a network with `num_decoder` copies of `decoder` connected to a frozen copy of `encoder`.
         ```plaintext
                    decoder →
                   / 
@@ -132,7 +132,7 @@ class DIBNetwork(_Network):
 
 class MetricNetwork(_Network):
     """
-    A blueprint which extends `_Network` with helper functions to compute NC1 and DIB
+    A blueprint which extends `_Network` with helper functions to compute NC and DIB
     """
 
     def __init__(self, hyperparams: HPARAM_TYPE, ignore: list[str] = []):
@@ -232,13 +232,6 @@ class _ConvPoolActivation(nn.Module):
 
 
 class MNISTNet(MetricNetwork):
-    """
-    Based on the current 94% CIFAR-10 speedrun world record holder by Keller Jordan
-    (https://github.com/KellerJordan/cifar10-airbench) and
-    Tuomas Oikarinen's performance-focussed (both in speed and accuracy) CNN.
-    (https://github.com/tuomaso/train_mnist_fast)
-    """
-
     def __init__(
         self, in_shape: torch.Size, nonlinearity: NL_TYPE, hyperparams: HPARAM_TYPE
     ):

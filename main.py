@@ -10,7 +10,7 @@ import datasets
 import networks
 from datasets import DATASET_TYPE, DataModule, DIBData
 from networks import LOSS_TYPE, NL_TYPE, OPT_TYPE, MetricNetwork
-from utils import ComputeDIB, ComputeNC1, get_args
+from utils import ComputeNC, ComputeVSuff, ComputeVMin, get_args
 
 args = get_args()
 seed_everything(seed=args.seed)
@@ -35,6 +35,7 @@ dm.setup("fit")
 
 # create trainer
 logger = CSVLogger(os.getcwd())
+dib_params = (args.dib_epochs, args.num_devices)
 trainer = Trainer(
     devices=args.num_devices,
     precision=args.precision,
@@ -44,10 +45,9 @@ trainer = Trainer(
     # deterministic=True, # ignored when benchmark=True
     num_sanity_val_steps=0,
     callbacks=[
-        ComputeDIB(
-            dib_dm=DIBData(dm), dib_epochs=args.dib_epochs, num_devices=args.num_devices
-        ),
-        ComputeNC1(dm.train_class_counts, dm.val_class_counts, dm.num_classes),
+        ComputeVSuff(dm, dib_params),
+        ComputeVMin(DIBData(dm), dib_params),
+        ComputeNC(dm.train_class_counts, dm.val_class_counts, dm.num_classes),
     ],
 )
 

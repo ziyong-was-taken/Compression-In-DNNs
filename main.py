@@ -35,7 +35,6 @@ dm.setup("fit")
 
 # create trainer
 logger = CSVLogger(os.getcwd())
-dib_params = (args.dib_epochs, args.num_devices)
 trainer = Trainer(
     devices=args.num_devices,
     precision=args.precision,
@@ -45,8 +44,8 @@ trainer = Trainer(
     # deterministic=True, # ignored when benchmark=True
     num_sanity_val_steps=0,
     callbacks=[
-        ComputeVSuff(dm, dib_params),
-        ComputeVMin(DIBData(dm), dib_params),
+        ComputeVSuff(dm, args.epochs, args.num_devices),
+        ComputeVMin(DIBData(dm), args.dib_epochs, args.num_devices),
         ComputeNC(dm.train_class_counts, dm.val_class_counts, dm.num_classes),
     ],
 )

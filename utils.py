@@ -309,14 +309,14 @@ class _ComputeVInfo(Callback):
     def __init__(
         self,
         dm: DataModule | DIBData,
-        dib_epochs: int,
+        epochs: int,
         num_devices: int,
         name: str,
         *block_indices: int,
     ):
         self.dm = dm
         self.name = name
-        self.v_info_epochs = dib_epochs
+        self.v_info_epochs = epochs
         self.num_devices = num_devices
         self.block_indices = block_indices
 
@@ -391,12 +391,12 @@ class _ComputeVInfo(Callback):
 class ComputeVSuff(_ComputeVInfo):
     """Compute and log the sufficiency term I_𝒱ˡ(𝗵ˡ → y) at the end of each epoch"""
 
-    def __init__(self, datamodule: DataModule, dib_params: DIB_PARAM_TYPE):
-        super().__init__(datamodule, *dib_params, "vsuff")
+    def __init__(self, dm: DataModule, epochs: int, num_devices: int):
+        super().__init__(dm, epochs, num_devices, "vsuff")
 
 
 class ComputeVMin(_ComputeVInfo):
     """Compute and log the minimality term I_𝒱ˡ(𝗵ˡ → Dec(𝘅, 𝒴)) at the end of each epoch"""
 
-    def __init__(self, dib_dm: DIBData, dib_params: DIB_PARAM_TYPE):
-        super().__init__(dib_dm, *dib_params, "vmin")
+    def __init__(self, dib_dm: DIBData, dib_epochs: int, num_devices: int):
+        super().__init__(dib_dm, dib_epochs, num_devices, "vmin")

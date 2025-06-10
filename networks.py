@@ -49,7 +49,7 @@ class _Network(LightningModule):
         raise NotImplementedError
 
     def training_step(self, batch: list[torch.Tensor]):
-        """Compute and log average training loss"""
+        """Compute and log average training loss and accuracy"""
         inputs, targets = batch
         outputs: torch.Tensor = self(inputs)
         loss = self.hparams_initial["criterion"]()(outputs, targets)
@@ -124,7 +124,7 @@ class VInfoNet(_Network):
     def forward(self, x):
         encoded = self.encoder(x)
         outputs = [d(encoded) for d in self.decoders]
-        return torch.stack(outputs, dim=-1)
+        return torch.stack(outputs, dim=-1) if len(outputs) > 1 else outputs[0]
 
     def _opt_parameters(self):
         return self.decoders.parameters()
@@ -157,7 +157,7 @@ class MetricNetwork(_Network):
             module.register_forward_hook(get_hook(name))
 
     def validation_step(self, batch: list[torch.Tensor]):
-        """Compute and log average validation loss"""
+        """Compute and log average validation loss and accuracy"""
         inputs, targets = batch
         outputs: torch.Tensor = self(inputs)
         loss = self.hparams_initial["criterion"]()(outputs, targets)

@@ -83,8 +83,8 @@ To force the CUDA build, use `torchvision>=0.21.0=cuda*` instead.
   uses a multi-layer perceptron model and the MNIST dataset.
 - supported models (case-sensitive):
   - `MLP`: multi-layer perceptron with custom widths specified by `-w` and nonlinearity specified by `-nl`
-  - `MNISTNet`: [Tuomas Oikarinen's optimised CNN](https://github.com/tuomaso/train_mnist_fast)
-  - `CIFARNet`: the [CIFAR-10 Airbench architecture](https://github.com/KellerJordan/cifar10-airbench) from [94% on CIFAR-10 in 3.29 Seconds on a Single GPU](https://arxiv.org/abs/2404.00498)
+  - `MNISTNet`: simplified `CIFARNet`
+  - `CIFARNet`: based on [CIFAR-10 Airbench architecture](https://github.com/KellerJordan/cifar10-airbench) from [94% on CIFAR-10 in 3.29 Seconds on a Single GPU](https://arxiv.org/abs/2404.00498)
   - `ConvNeXt`: the [ConvNeXt-T architecture](https://pytorch.org/vision/0.21/models/generated/torchvision.models.convnext_tiny.html) from [A ConvNet for the 2020s](https://openaccess.thecvf.com/content/CVPR2022/html/Liu_A_ConvNet_for_the_2020s_CVPR_2022_paper.html)
   - `ResNet`: the [ResNet-18 architecture](https://pytorch.org/vision/0.21/models/generated/torchvision.models.resnet18.html) from [Deep Residual Learning for Image Recognition](https://openaccess.thecvf.com/content_cvpr_2016/html/He_Deep_Residual_Learning_CVPR_2016_paper.html)
 - supported datasets (case-sensitive):
@@ -123,9 +123,9 @@ Both the NC and DIB metrics are computed after each epoch for both the train and
 
 ### Modified Algorithm 1
 
-1. For each class $y$, enumerate the samples $\mathcal X_y = \{x ∣ x$ has label $y\}$, i.e., assign them the indices $0,1,…,|\mathcal X_y| - 1$
-2. Convert each index to base $C$ (the number of classes), implicitly padding with zeros to the left. It is easy to see that the maximum number of digits is $N_D = ⌈\log_{|Y|}(\max\{|\mathcal X_y| : y ∈ \mathcal Y\})⌉$.
-3. The new labels for each sample are the digits of its base-$C$ representation.
+1. For each class $c$, enumerate the samples $\mathcal X_c = \{x ∣ x$ has label $y = c\}$, i.e., assign them the indices $0,1,…,n_c - 1$ (recall that $n_c = |\mathcal X_c|$)
+2. Convert each index to base $C$ (the number of classes), implicitly padding with zeros to the left. It is easy to see that the maximum number of digits is $N_D = ⌈\log_C(\max_c n_c)⌉$.
+3. The new labels for each sample are the digits of its base $C$ representation.
 
 <!-- markdownlint-disable MD033 -->
 <details>
@@ -134,7 +134,7 @@ Both the NC and DIB metrics are computed after each epoch for both the train and
 Let $C = 5$ and the samples be labeled [0, 0, 0, 1, 1, 3, 4, 4, 4, 4, 4, 4].
 Then, the samples are assigned the indices [0, 1, 2, 0, 1, 0, 0, 1, 2, 3, 4, 5].
 Converting to base $C = 5$ and zero-padding to the left gives \[[0, 0], [0, 1], [0, 2], [0, 0], [0, 1], [0, 0], [0, 0], [0, 1], [0, 2], [0, 3], [0, 4], [1, 0]\].
-The new sample labels are then [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] and [0, 1, 2, 0, 1, 0, 0, 1, 2, 3, 4, 0].
+The new labels are then [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] and [0, 1, 2, 0, 1, 0, 0, 1, 2, 3, 4, 0].
 
 </details>
 <!-- markdownlint-enable MD033 -->

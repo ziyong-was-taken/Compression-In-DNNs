@@ -190,7 +190,7 @@ class DIBData(DataModule):
         self.data = {"train": dm.train_data, "val": dm.val_data}
         self.num_classes = dm.num_classes
         self.num_decoders = {
-            # ⌈log_{|Y|}(max{|X_y| : y ∈ Y})⌉ new labels per sample
+            # ⌈log_C(max_c n_c)⌉ new labels per sample
             dataset: math.ceil(math.log(class_counts.max(), self.num_classes))
             for dataset, class_counts in self.class_counts.items()
         }
@@ -198,9 +198,8 @@ class DIBData(DataModule):
     def _base_expand(self, labels: torch.Tensor, num_decoders: int):
         r"""
         Generate relabeling `N` of the data where `N[i,:]` are the new labels of the `i`th sample.
-        Each sample obtains ⌈log_{|Y|}(max{|X_y| : y ∈ Y})⌉ new labels,
-        where {|X_y| : y ∈ Y} = {|{l ∈ `labels` : l = y}| : y ∈ Y} = `class_counts`
-        and Y = {0,…,`num_classes`-1}.
+        Each sample obtains ⌈log_C(max_c n_c)⌉ new labels,
+        where n_1,…n_C are the class_counts.
         Based on Algorithm 1 of "Learning Optimal Representations with
         the Decodable Information Bottleneck".
         """

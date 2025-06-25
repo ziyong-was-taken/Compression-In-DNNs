@@ -93,9 +93,7 @@ def get_args():
     parser.add_argument("--dib-epochs", default=DIB_EPOCHS, type=int)
     parser.add_argument("--epochs", default=EPOCHS, type=int)
     parser.add_argument("-lr", "--learning-rate", default=LR, type=float)
-    parser.add_argument(
-        "--loss", default="CrossEntropy", choices=["CrossEntropy"]
-    )
+    parser.add_argument("--loss", default="CrossEntropy", choices=["CrossEntropy"])
     parser.add_argument(
         "-m",
         "--model",

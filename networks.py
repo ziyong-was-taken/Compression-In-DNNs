@@ -171,7 +171,7 @@ class MetricNetwork(_Network):
 
     def _check_encoder_blocks(self, encoder_blocks: int):
         assert encoder_blocks <= self.num_blocks, (
-            f"{type(self).__name__} only has {self.num_blocks} blocks"
+            f"{type(self).__name__} only has {self.num_blocks} block(s)"
         )
 
     def get_encoder_decoder(self, encoder_blocks: int) -> tuple[nn.Module, nn.Module]:
@@ -222,7 +222,7 @@ class MLP(MetricNetwork):
 class _ConvPoolActivation(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, nonlinearity: NL_TYPE):
         super().__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, 5, padding="same")
+        self.conv = nn.Conv2d(in_channels, out_channels, 5, padding="same", bias=False)
         self.bn = nn.BatchNorm2d(out_channels, track_running_stats=False)
         self.pool = nn.MaxPool2d(3)
         self.nl = nonlinearity()

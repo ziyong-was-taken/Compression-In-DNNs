@@ -95,7 +95,7 @@ def get_args():
     parser.add_argument("-lr", "--learning-rate", default=LR, type=float)
     parser.add_argument(
         "--loss", default="CrossEntropy", choices=["CrossEntropy"]
-    )  # TODO: add MSELoss
+    )
     parser.add_argument(
         "-m",
         "--model",

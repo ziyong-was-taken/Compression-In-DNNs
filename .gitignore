@@ -1,6 +1,8 @@
 __pycache__/
+typings/
 data/*
 lightning_logs/
 *.sif
 test.py
 job.sh
+.harper-dictionary.txt

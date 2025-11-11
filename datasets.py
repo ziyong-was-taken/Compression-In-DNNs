@@ -1,8 +1,11 @@
 import math
+from collections.abc import Callable as _Callable
+from typing import override as _override
 
 import torch
 from lightning import LightningDataModule
 from lightning.fabric.utilities import suggested_max_num_workers as max_num_workers
+from numpy import ndarray
 from torch.nn.functional import one_hot
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision.datasets import CIFAR10, MNIST, FashionMNIST, VisionDataset
@@ -10,22 +13,26 @@ from torchvision.transforms import v2
 
 
 class SZT(VisionDataset):
-    classes = [0, 1]  # binary classification
-    training_file = "/SZT.pt"
+    classes: list[int] = [0, 1]  # binary classification
+    training_file: str = "/SZT.pt"
+    transform: _Callable[..., torch.Tensor] | None = (
+        None  # initialise variable for typechecker
+    )
 
     def __init__(
         self,
         root: str,
         train: bool,  # only for compatibility
-        transform=None,
+        transform: _Callable[..., torch.Tensor] | None = None,
         download: bool = False,  # only for compatibility
     ):
-        super().__init__(root, transform=transform)
+        super().__init__(root, transform=transform)  # pyright: ignore[reportUnknownMemberType]
         self.data: torch.Tensor
         self.data, self.targets = torch.load(root + self.training_file)
         self.targets: torch.Tensor = self.targets.long()
 
-    def __getitem__(self, index):
+    @_override
+    def __getitem__(self, index: int):
         # treat the data as images
         img = self.data[index].unsqueeze(dim=0)
         target = self.targets[index]
@@ -33,6 +40,7 @@ class SZT(VisionDataset):
             img = self.transform(img)
         return img, target
 
+    @_override
     def __len__(self):
         return self.data.size(0)
 
@@ -42,6 +50,20 @@ DATASET_TYPE = type[CIFAR10 | FashionMNIST | MNIST | SZT]
 
 
 class DataModule(LightningDataModule):
+    # initialise variables for typechecker
+    input_size: torch.Size = torch.Size([])
+    num_classes: int = 0
+
+    train_class_counts: torch.Tensor = torch.empty([])
+    train_labels: torch.Tensor = torch.empty([])
+    train_data: torch.Tensor = torch.empty([])
+    train: TensorDataset = TensorDataset()
+
+    val_class_counts: torch.Tensor = torch.empty([])
+    val_labels: torch.Tensor = torch.empty([])
+    val_data: torch.Tensor = torch.empty([])
+    val: TensorDataset = TensorDataset()
+
     def __init__(
         self,
         subset: int,
@@ -52,29 +74,32 @@ class DataModule(LightningDataModule):
     ):
         super().__init__()
 
-        self.subset = subset
-        self.dataset = dataset
-        self.data_dir = data_dir
-        self.batch_size = batch_size
-        self.num_devices = num_devices
-        self.transform = v2.Compose(
+        self.subset: int = subset
+        self.dataset: DATASET_TYPE = dataset
+        self.data_dir: str = data_dir
+        self.batch_size: int = batch_size
+        self.num_devices: int = num_devices
+        self.transform: _Callable[..., torch.Tensor] = v2.Compose(
             [
                 v2.ToImage(),  # convert to TVTensor Image
                 v2.ToDtype(torch.float, scale=True),  # uint8 {0,…,255} to float32 [0,1]
             ]
         )
-        self.num_decoders = {"train": 1, "val": 1}
+        self.num_decoders: dict[str, int] = {"train": 1, "val": 1}
 
+    @_override
     def prepare_data(self):
         for train in (True, False):
-            self.dataset(self.data_dir, train=train, download=True)
+            _ = self.dataset(self.data_dir, train=train, download=True)
 
-    def _preprocess(self, raw_data):
-        """Reshape data to be at least 4D with dimensions (N,C,H,W)"""
+    def _preprocess(self, raw_data: torch.Tensor | ndarray):
+        """Reshape data to be at least 4D with dimensions (N, C, H, W)"""
         data = torch.as_tensor(raw_data)
         size_4d = data.size() + (1,) * (4 - data.dim())
         return (
-            data.reshape(size_4d).movedim(3, 1).float(memory_format=torch.channels_last)
+            data.reshape(size_4d)
+            .movedim(3, 1)
+            .to(torch.float32, memory_format=torch.channels_last)
         )
 
     def _get_stratification_mask(
@@ -106,7 +131,8 @@ class DataModule(LightningDataModule):
 
         return mask
 
-    def setup(self, stage):
+    @_override
+    def setup(self, stage: str):
         """
         Setup the train and validation datasets.
         Before training, compute the input size, number of classes,
@@ -162,8 +188,10 @@ class DataModule(LightningDataModule):
                 self.val_data = self._preprocess(val_ds.data)
                 self.train = TensorDataset(self.train_data, self.train_labels)
                 self.val = TensorDataset(self.val_data, self.val_labels)
+            case _:
+                pass
 
-    def _dataloader(self, dataset, shuffle: bool):
+    def _dataloader(self, dataset: torch.utils.data.TensorDataset, shuffle: bool):
         return DataLoader(
             dataset,
             batch_size=self.batch_size // self.num_devices,
@@ -173,9 +201,11 @@ class DataModule(LightningDataModule):
             persistent_workers=True,  # Keep workers alive between epochs
         )
 
+    @_override
     def train_dataloader(self):
         return self._dataloader(self.train, shuffle=True)
 
+    @_override
     def val_dataloader(self):
         return self._dataloader(self.val, shuffle=True)
 
@@ -185,11 +215,11 @@ class DIBData(DataModule):
         super().__init__(
             dm.subset, dm.dataset, dm.data_dir, dm.batch_size, dm.num_devices
         )
-        self.labels = {"train": dm.train_labels, "val": dm.val_labels}
-        self.class_counts = {"train": dm.train_class_counts, "val": dm.val_class_counts}
-        self.data = {"train": dm.train_data, "val": dm.val_data}
-        self.num_classes = dm.num_classes
-        self.num_decoders = {
+        self.labels: dict[str, torch.Tensor] = {"train": dm.train_labels, "val": dm.val_labels}
+        self.class_counts: dict[str, torch.Tensor] = {"train": dm.train_class_counts, "val": dm.val_class_counts}
+        self.data: dict[str, torch.Tensor] = {"train": dm.train_data, "val": dm.val_data}
+        self.num_classes: int = dm.num_classes
+        self.num_decoders: dict[str, int] = {
             # ⌈log_C(max_c n_c)⌉ new labels per sample
             dataset: math.ceil(math.log(class_counts.max(), self.num_classes))
             for dataset, class_counts in self.class_counts.items()
@@ -217,7 +247,8 @@ class DIBData(DataModule):
         temp = indices.unsqueeze(1).expand(-1, num_decoders)
         return (temp // divisors) % self.num_classes
 
-    def setup(self, stage):
+    @_override
+    def setup(self, stage: str):
         match stage:
             case "fit":
                 # create DIB datasets
@@ -225,5 +256,7 @@ class DIBData(DataModule):
                     self._base_expand(self.labels[dataset], self.num_decoders[dataset])
                     for dataset in ("train", "val")
                 )
-                self.train = TensorDataset(self.data["train"], train_dib_labels)
-                self.val = TensorDataset(self.data["val"], val_dib_labels)
+                self.train: TensorDataset = TensorDataset(self.data["train"], train_dib_labels)
+                self.val: TensorDataset = TensorDataset(self.data["val"], val_dib_labels)
+            case _:
+                pass
